@@ -1,140 +1,215 @@
-import nodemailer from 'nodemailer';
-import dotenv from 'dotenv';
+import dotenv from "dotenv";
+import { Resend } from "resend";
 
 dotenv.config();
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.EMAIL_USER, // your @gmail.com
-    pass: process.env.EMAIL_PASS  // your app password
-  }
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Verify transporter configuration
+// Compatibility transporter object (keeps existing usage)
+const transporter = {
+  verify: (cb) => cb(null, true),
+};
+
 transporter.verify((error, success) => {
   if (error) {
-    console.error('❌ Email transporter error:', error);
+    console.error("❌ Email transporter error:", error);
   } else {
-    console.log('✅ Email server is ready to send messages');
+    console.log("✅ Resend email service is ready to send messages");
   }
 });
 
-// Send 2FA code email
+// Helper: wrap HTML in a complete email document (keeps templates consistent)
+const wrapHtml = (innerHtml) => `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <title>Email</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#111111;">
+    ${innerHtml}
+  </body>
+</html>`;
+
+// ------------------------------------------------------
+//  SEND 2FA CODE EMAIL
+// ------------------------------------------------------
 export const send2FACode = async (email, code, userName) => {
-  const mailOptions = {
-    from: `"Auth System" <${process.env.EMAIL_USER}>`,
-    to: email,
-    subject: 'Your Two-Factor Authentication Code',
-    html: `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <style>
-          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0; }
-          .container { max-width: 600px; margin: 40px auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; color: white; }
-          .header h1 { margin: 0; font-size: 28px; }
-          .content { padding: 40px 30px; }
-          .code-box { background: #f8f9fa; border: 2px dashed #667eea; border-radius: 8px; padding: 20px; text-align: center; margin: 30px 0; }
-          .code { font-size: 36px; font-weight: bold; color: #667eea; letter-spacing: 8px; font-family: 'Courier New', monospace; }
-          .info { color: #666; line-height: 1.6; margin: 20px 0; }
-          .warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; color: #856404; }
-          .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>🔐 Two-Factor Authentication</h1>
-          </div>
-          <div class="content">
-            <p class="info">Hello <strong>${userName}</strong>,</p>
-            <p class="info">You've requested to sign in to your account. Please use the verification code below:</p>
-            
-            <div class="code-box">
-              <div class="code">${code}</div>
-            </div>
-            
-            <p class="info">This code will expire in <strong>10 minutes</strong>.</p>
-            
-            <div class="warning">
-              ⚠️ <strong>Security Notice:</strong> If you didn't request this code, please ignore this email and ensure your account is secure.
-            </div>
-          </div>
-          <div class="footer">
-            <p>This is an automated message, please do not reply.</p>
-            <p>&copy; 2025 Auth System. All rights reserved.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `,
-  };
+  // Professional black & white template (table-based, inline styles)
+  const html = wrapHtml(`
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#111111;width:100%;min-width:320px;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <!-- container -->
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;">
+          <!-- Header -->
+          <tr>
+            <td style="background:#000000;padding:28px 24px;text-align:center;color:#ffffff;">
+              <h1 style="margin:0;font-size:20px;font-weight:600;letter-spacing:0.2px;">Auth System</h1>
+              <div style="margin-top:6px;font-size:12px;color:#cfcfcf;">Two-Factor Authentication</div>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:28px 28px 20px 28px;color:#111111;">
+              <p style="margin:0 0 12px 0;font-size:15px;line-height:1.5;color:#222222;">
+                Hi <strong style="font-weight:600;">${userName}</strong>,
+              </p>
+
+              <p style="margin:0 0 18px 0;font-size:14px;color:#333333;line-height:1.5;">
+                Use the verification code below to sign in. This code will expire in <strong>10 minutes</strong>.
+              </p>
+
+              <!-- Code box -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;">
+                <tr>
+                  <td align="center">
+                    <div style="display:inline-block;padding:18px 28px;border-radius:8px;border:1px solid #e8e8e8;background:#fbfbfb;">
+                      <span style="font-family: 'Courier New', monospace;font-size:28px;letter-spacing:6px;color:#000000;font-weight:700;">${code}</span>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:0 0 12px 0;font-size:13px;color:#666666;line-height:1.5;">
+                If you did not request this, you can safely ignore this email — no changes were made to your account.
+              </p>
+
+              <div style="margin-top:18px;padding:12px;border-left:4px solid #e0e0e0;background:#fafafa;border-radius:6px;font-size:13px;color:#555555;">
+                <strong>Security tip:</strong> Never share your code with anyone.
+              </div>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#fafafa;padding:18px 24px;text-align:center;color:#555555;font-size:12px;">
+              <div style="max-width:540px;margin:0 auto;">
+                <div style="margin-bottom:6px;color:#777777;">This is an automated message. Please do not reply.</div>
+                <div style="color:#999999;">&copy; ${new Date().getFullYear()} Auth System</div>
+              </div>
+            </td>
+          </tr>
+        </table>
+        <!-- end container -->
+      </td>
+    </tr>
+  </table>
+  `);
 
   try {
-    await transporter.sendMail(mailOptions);
+    await resend.emails.send({
+      from: `Auth System <hello@nandeeshkhant.info>`,
+      to: email,
+      subject: "Your verification code — Auth System",
+      html,
+    });
     return { success: true };
   } catch (error) {
-    console.error('Error sending 2FA email:', error);
-    return { success: false, error: error.message };
+    console.error("Error sending 2FA email:", error);
+    return { success: false, error: error.message || String(error) };
   }
 };
 
-// Send welcome email
+// ------------------------------------------------------
+//  SEND WELCOME EMAIL
+// ------------------------------------------------------
 export const sendWelcomeEmail = async (email, userName) => {
-  const mailOptions = {
-    from: `"Auth System" <${process.env.EMAIL_USER}>`,
-    to: email,
-    subject: 'Welcome to Auth System!',
-    html: `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <style>
-          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0; }
-          .container { max-width: 600px; margin: 40px auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px; text-align: center; color: white; }
-          .header h1 { margin: 0; font-size: 32px; }
-          .content { padding: 40px 30px; }
-          .info { color: #666; line-height: 1.8; margin: 20px 0; }
-          .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>🎉 Welcome!</h1>
-          </div>
-          <div class="content">
-            <p class="info">Hello <strong>${userName}</strong>,</p>
-            <p class="info">Welcome to our secure authentication system! Your account has been successfully created.</p>
-            <p class="info">You can now enjoy features like:</p>
-            <ul class="info">
-              <li>Two-factor authentication for enhanced security</li>
-              <li>Customizable session duration</li>
-              <li>Device management and tracking</li>
-              <li>Secure session management</li>
-            </ul>
-            <p class="info">Thank you for joining us!</p>
-          </div>
-          <div class="footer">
-            <p>&copy; 2025 Auth System. All rights reserved.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `,
-  };
+  const html = wrapHtml(`
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#111111;width:100%;min-width:320px;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;">
+          <tr>
+            <td style="background:#000000;padding:28px 24px;text-align:center;color:#ffffff;">
+              <h1 style="margin:0;font-size:20px;font-weight:600;">Welcome to Auth System</h1>
+              <div style="margin-top:6px;font-size:12px;color:#cfcfcf;">Secure accounts. Smooth experience.</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:28px 28px 18px 28px;color:#111111;">
+              <p style="margin:0 0 12px 0;font-size:15px;line-height:1.5;color:#222222;">
+                Hello <strong style="font-weight:600;">${userName}</strong>,
+              </p>
+
+              <p style="margin:0 0 16px 0;font-size:14px;color:#333333;line-height:1.5;">
+                Thanks for creating an account with Auth System. We're happy to have you onboard.
+              </p>
+
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0 24px 0;">
+                <tr>
+                  <td style="padding:0 0 8px 0;">
+                    <div style="display:flex;gap:10px;align-items:flex-start;">
+                      <div style="min-width:44px;height:44px;border-radius:8px;background:#f5f5f5;display:flex;align-items:center;justify-content:center;font-weight:700;color:#000000;font-size:18px;">
+                        ✓
+                      </div>
+                      <div style="flex:1;">
+                        <div style="font-size:14px;font-weight:600;color:#111111;margin-bottom:4px;">Two-factor authentication</div>
+                        <div style="font-size:13px;color:#666666;line-height:1.4;">Add an extra layer of protection to your account.</div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:12px 0 8px 0;">
+                    <div style="display:flex;gap:10px;align-items:flex-start;">
+                      <div style="min-width:44px;height:44px;border-radius:8px;background:#f5f5f5;display:flex;align-items:center;justify-content:center;font-weight:700;color:#000000;font-size:18px;">
+                        🔒
+                      </div>
+                      <div style="flex:1;">
+                        <div style="font-size:14px;font-weight:600;color:#111111;margin-bottom:4px;">Session & device security</div>
+                        <div style="font-size:13px;color:#666666;line-height:1.4;">Manage where you're signed in and end sessions remotely.</div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:12px 0 0 0;">
+                    <div style="display:flex;gap:10px;align-items:flex-start;">
+                      <div style="min-width:44px;height:44px;border-radius:8px;background:#f5f5f5;display:flex;align-items:center;justify-content:center;font-weight:700;color:#000000;font-size:18px;">
+                        ⚙️
+                      </div>
+                      <div style="flex:1;">
+                        <div style="font-size:14px;font-weight:600;color:#111111;margin-bottom:4px;">Developer friendly</div>
+                        <div style="font-size:13px;color:#666666;line-height:1.4;">APIs and SDKs to integrate Auth System quickly.</div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:0 0 8px 0;font-size:14px;color:#333333;">If you need help getting started, reply to this email or visit our docs.</p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background:#fafafa;padding:18px 24px;text-align:center;color:#555555;font-size:12px;">
+              <div style="margin-bottom:6px;color:#777777;">This is an automated message. Please do not reply.</div>
+              <div style="color:#999999;">&copy; ${new Date().getFullYear()} Auth System</div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+  `);
 
   try {
-    await transporter.sendMail(mailOptions);
+    await resend.emails.send({
+      from: `Auth System <hello@nandeeshkhant.info>`,
+      to: email,
+      subject: "Welcome to Auth System!",
+      html,
+    });
     return { success: true };
   } catch (error) {
-    console.error('Error sending welcome email:', error);
-    return { success: false, error: error.message };
+    console.error("Error sending welcome email:", error);
+    return { success: false, error: error.message || String(error) };
   }
 };
 
