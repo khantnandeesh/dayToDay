@@ -28,7 +28,7 @@ const VaultItemDetails = ({ item, onClose, onEdit }) => {
     if (!item) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
             <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl flex flex-col overflow-hidden">
                 <div className="p-6 bg-slate-50 border-b border-slate-100 flex items-start justify-between">
                     <div className="flex items-center gap-4">

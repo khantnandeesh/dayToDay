@@ -106,9 +106,9 @@ const VaultDashboard = () => {
     };
 
     return (
-        <div className="flex flex-col md:flex-row h-[85vh] bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden animate-fade-in">
-            {/* Sidebar */}
-            <div className="w-full md:w-64 bg-slate-50 border-r border-slate-200 flex flex-col">
+        <div className="flex flex-col md:flex-row h-auto md:h-[85vh] bg-white rounded-2xl shadow-xl border border-slate-200 md:overflow-hidden animate-fade-in relative">
+            {/* Sidebar (Desktop) */}
+            <div className="hidden md:flex w-64 bg-slate-50 border-r border-slate-200 flex-col">
                 <div className="p-4 border-b border-slate-200 flex items-center justify-between">
                     <span className="font-bold text-slate-800">My Vault</span>
                     <button
@@ -161,10 +161,26 @@ const VaultDashboard = () => {
             </div>
 
             {/* Main Content */}
-            <div className="flex-1 flex flex-col min-w-0">
+            <div className="flex-1 flex flex-col min-w-0 relative">
+
+                {/* Mobile Header */}
+                <div className="md:hidden p-4 border-b border-slate-200 flex items-center justify-between bg-white shrink-0">
+                    <span className="font-bold text-slate-800 flex items-center gap-2">
+                        <Shield className="w-5 h-5 text-slate-900" />
+                        My Vault
+                    </span>
+                    <button
+                        onClick={lockVault}
+                        className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Lock Vault"
+                    >
+                        <Lock className="w-5 h-5" />
+                    </button>
+                </div>
+
                 {/* Toolbar */}
-                <div className="p-4 border-b border-slate-200 flex items-center gap-4">
-                    <div className="relative flex-1 max-w-md">
+                <div className="p-4 border-b border-slate-200 flex items-center gap-4 bg-white shrink-0">
+                    <div className="relative flex-1 max-w-full md:max-w-md">
                         <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
                         <input
                             type="text"
@@ -176,10 +192,30 @@ const VaultDashboard = () => {
                     </div>
                 </div>
 
+                {/* Mobile Categories Scroll */}
+                <div className="md:hidden px-4 pb-3 flex items-center gap-2 overflow-x-auto shrink-0 bg-white border-b border-slate-100 scrollbar-hide">
+                    {allCategories.map(cat => (
+                        <button
+                            key={cat.id}
+                            onClick={() => setCategory(cat.id)}
+                            className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-bold transition-all
+                                ${category === cat.id ? 'bg-slate-900 text-white shadow-md' : 'bg-slate-100 text-slate-600 border border-slate-200'}`}
+                        >
+                            {cat.label}
+                        </button>
+                    ))}
+                    <button
+                        onClick={() => setIsTemplateCreatorOpen(true)}
+                        className="px-3 py-1.5 rounded-full text-xs font-medium border border-dashed border-slate-300 text-slate-500 whitespace-nowrap"
+                    >
+                        + New
+                    </button>
+                </div>
+
                 {/* Items List */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50">
+                <div className="md:flex-1 md:overflow-y-auto p-4 space-y-4 bg-slate-50/50 min-h-[500px] md:min-h-0">
                     {filteredItems.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                        <div className="flex flex-col items-center justify-center py-12 md:py-0 md:h-full text-slate-400">
                             <Filter className="w-12 h-12 mb-4 opacity-20" />
                             <p>No items found in {category === 'all' ? 'vault' : category}</p>
                         </div>
@@ -255,6 +291,14 @@ const VaultDashboard = () => {
                         </div>
                     )}
                 </div>
+
+                {/* Mobile FAB */}
+                <button
+                    onClick={() => { setEditingItem(null); setIsEditorOpen(true); }}
+                    className="md:hidden fixed bottom-6 right-6 w-14 h-14 bg-slate-900 text-white rounded-full shadow-lg shadow-slate-900/30 flex items-center justify-center z-40 hover:bg-slate-800 active:scale-95 transition-all"
+                >
+                    <Plus className="w-6 h-6" />
+                </button>
             </div>
 
             {/* Modals */}

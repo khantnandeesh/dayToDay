@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Monitor, Shield, Activity, Smartphone, Clock, Globe, Trash2, AlertCircle } from 'lucide-react';
+import { Monitor, Shield, Activity, Smartphone, Clock, Globe, Trash2, AlertCircle, Laptop, Tablet, Command, Terminal } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import api from '../config/api';
 import Navbar from '../components/Navbar';
@@ -87,6 +87,51 @@ const Profile = () => {
         });
     };
 
+    const getDeviceIcon = (os, type) => {
+        const osLower = (os || '').toLowerCase();
+        const typeLower = (type || '').toLowerCase();
+
+        if (typeLower === 'mobile') return <Smartphone className="w-6 h-6" />;
+        if (typeLower === 'tablet') return <Tablet className="w-6 h-6" />;
+
+        if (osLower.includes('mac') || osLower.includes('ios')) return <Command className="w-6 h-6" />;
+        if (osLower.includes('win')) return <Monitor className="w-6 h-6" />;
+        if (osLower.includes('linux')) return <Terminal className="w-6 h-6" />;
+
+        return <Laptop className="w-6 h-6" />;
+    };
+
+    const getSecurityStatus = () => {
+        const issues = [];
+
+        if (!user.twoFactorEnabled) {
+            issues.push('Enable 2FA');
+        }
+
+        if (devices.length > 3) {
+            issues.push('Check active sessions');
+        }
+
+        if (issues.length === 0) {
+            return {
+                label: 'Protected',
+                colorClass: 'bg-green-100 text-green-700',
+                iconColor: 'bg-green-50 text-green-600',
+                message: 'No security issues found'
+            };
+        } else {
+            return {
+                label: 'Action Needed',
+                colorClass: 'bg-amber-100 text-amber-700',
+                iconColor: 'bg-amber-50 text-amber-600',
+                message: issues.join(', ') || 'Review security settings'
+            };
+        }
+    };
+
+    const securityStatus = getSecurityStatus();
+
+
     return (
         <div className="min-h-screen bg-slate-50">
             <Navbar />
@@ -136,17 +181,18 @@ const Profile = () => {
                     </div>
 
                     {/* Account Status */}
+                    {/* Account Status */}
                     <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                         <div className="flex items-center justify-between mb-4">
-                            <div className="p-2 bg-purple-50 text-purple-600 rounded-lg">
+                            <div className={`p-2 rounded-lg ${securityStatus.iconColor}`}>
                                 <Activity className="w-6 h-6" />
                             </div>
-                            <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-                                Good
+                            <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${securityStatus.colorClass}`}>
+                                {securityStatus.label}
                             </span>
                         </div>
                         <h3 className="font-medium text-slate-700">Account Status</h3>
-                        <p className="text-sm text-slate-500 mt-1">No security issues detected</p>
+                        <p className="text-sm text-slate-500 mt-1">{securityStatus.message}</p>
                     </div>
                 </div>
 
@@ -191,11 +237,11 @@ const Profile = () => {
                                     <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
                                         <div className="flex item-start gap-4">
                                             <div className={`p-3 rounded-xl ${device.isCurrent ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-600'}`}>
-                                                {device.deviceType === 'mobile' ? <Smartphone className="w-6 h-6" /> : <Monitor className="w-6 h-6" />}
+                                                {getDeviceIcon(device.os, device.deviceType)}
                                             </div>
                                             <div>
                                                 <div className="flex items-center gap-2 mb-1">
-                                                    <h3 className="font-semibold text-slate-900">{device.deviceName || 'Unknown Device'}</h3>
+                                                    <h3 className="font-semibold text-slate-900">{device.os} - {device.browser}</h3>
                                                     {device.isCurrent && (
                                                         <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
                                                             Current Device
@@ -205,7 +251,7 @@ const Profile = () => {
                                                 <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-500 mt-2">
                                                     <div className="flex items-center gap-1.5">
                                                         <Globe className="w-4 h-4" />
-                                                        {device.browser} • {device.ip}
+                                                        {device.ip === '::1' || device.ip === '127.0.0.1' ? 'Localhost' : device.ip}
                                                     </div>
                                                     <div className="flex items-center gap-1.5">
                                                         <Clock className="w-4 h-4" />

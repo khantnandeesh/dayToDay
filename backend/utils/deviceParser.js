@@ -31,10 +31,10 @@ const getDeviceName = (result) => {
   const os = result.os.name || 'Unknown OS';
 
   if (device === 'mobile') {
-    return `📱 ${os} Mobile - ${browser}`;
+    return `${os} Mobile - ${browser}`;
   } else if (device === 'tablet') {
-    return `📱 ${os} Tablet - ${browser}`;
+    return `${os} Tablet - ${browser}`;
   } else {
-    return `💻 ${os} - ${browser}`;
+    return `${os} - ${browser}`;
   }
 };

@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import Session from '../models/Session.js';
-import { send2FACode, sendWelcomeEmail } from '../config/email.js';
+import { send2FACode, sendWelcomeEmail, sendLoginAlert } from '../config/email.js';
 import { parseDeviceInfo } from '../utils/deviceParser.js';
 
 // Generate JWT token
@@ -128,6 +128,9 @@ export const login = async (req, res) => {
     user.addDevice(deviceInfo);
     await user.save();
 
+    // Send Login Alert
+    await sendLoginAlert(email, user.name, deviceInfo);
+
     // Generate token
     const token = generateToken(user._id);
 
@@ -222,6 +225,9 @@ export const verify2FA = async (req, res) => {
     // Add device to user
     user.addDevice(deviceInfo);
     await user.save();
+
+    // Send Login Alert
+    await sendLoginAlert(user.email, user.name, deviceInfo);
 
     // Generate token
     const token = generateToken(user._id);
