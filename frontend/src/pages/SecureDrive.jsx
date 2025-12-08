@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import Navbar from '../components/Navbar';
 import {
     HardDrive, Folder, FileText, Image as ImageIcon, Film,
-    MoreVertical, Download, Trash2, Plus, ArrowLeft, Search, Loader, Cloud, Share2, RotateCcw, Edit2
+    MoreVertical, Download, Trash2, Plus, ArrowLeft, Search, Loader, Cloud, Share2, RotateCcw, Edit2, X, XCircle
 } from 'lucide-react';
 import api from '../config/api';
 import UploadProgress from '../components/drive/UploadProgress';
@@ -185,11 +185,14 @@ const SecureDrive = () => {
         }
     };
 
-    const handleFileUpload = (event) => {
-        const fileList = Array.from(event.target.files);
-        if (fileList.length === 0) return;
+    const [isDragging, setIsDragging] = useState(false);
 
-        const newItems = fileList.map(file => ({
+    // ... (previous helper fns) ...
+
+    const processFiles = (files) => {
+        if (files.length === 0) return;
+
+        const newItems = files.map(file => ({
             id: Math.random().toString(36).substr(2, 9),
             file,
             name: file.name,
@@ -201,9 +204,31 @@ const SecureDrive = () => {
 
         setUploads(prev => [...newItems, ...prev]);
         setIsUploadPanelOpen(true);
-        event.target.value = null;
-
         newItems.forEach(item => processUpload(item));
+    };
+
+    const handleFileUpload = (event) => {
+        const fileList = Array.from(event.target.files);
+        processFiles(fileList);
+        event.target.value = null;
+    };
+
+    // Drag & Drop Handlers
+    const handleDragOver = (e) => {
+        e.preventDefault();
+        setIsDragging(true);
+    };
+
+    const handleDragLeave = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+    };
+
+    const handleDrop = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        const files = Array.from(e.dataTransfer.files);
+        processFiles(files);
     };
 
     const handleDelete = async (id, type) => {
@@ -262,6 +287,27 @@ const SecureDrive = () => {
         }
     };
 
+    const handleDeletePermanent = async (id, type) => {
+        if (!confirm("This will permanently delete the item. Are you sure?")) return;
+        try {
+            await api.post('/drive/delete-permanent', { id, type });
+            invalidateAndRefresh();
+        } catch (error) {
+            alert("Permanent deletion failed");
+        }
+    };
+
+    const handleRevokeShare = async (id) => {
+        if (!confirm("Revoke public access? The link will verify work.")) return;
+        try {
+            await api.post('/drive/revoke-share', { id });
+            alert("Access revoked");
+            invalidateAndRefresh();
+        } catch (error) {
+            alert("Failed to revoke access");
+        }
+    };
+
     const handlePreview = async (file) => {
         // 1. Check Cache
         const cached = previewCache[file._id];
@@ -307,8 +353,22 @@ const SecureDrive = () => {
     };
 
     return (
-        <div className="min-h-screen bg-slate-50 font-sans">
+        <div
+            className="min-h-screen bg-slate-50 font-sans relative"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+        >
             <Navbar />
+
+            {/* Drag Overlay */}
+            {isDragging && !viewTrash && (
+                <div className="fixed inset-0 z-50 bg-blue-500/10 backdrop-blur-sm border-4 border-blue-500 border-dashed m-4 rounded-3xl flex flex-col items-center justify-center animate-fade-in pointer-events-none">
+                    <Cloud className="w-24 h-24 text-blue-600 mb-4 animate-bounce" />
+                    <h2 className="text-3xl font-bold text-blue-700">Drop files to upload</h2>
+                    <p className="text-blue-600 mt-2">to {folderStack[folderStack.length - 1].name}</p>
+                </div>
+            )}
 
             <div className="max-w-7xl mx-auto px-4 py-8 md:px-8 pb-32">
 
@@ -406,13 +466,22 @@ const SecureDrive = () => {
                                     <span className="text-sm font-medium text-slate-700 truncate w-full px-2">{folder.name}</span>
 
                                     {viewTrash ? (
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); handleRestore(folder._id, 'folder'); }}
-                                            className="absolute top-2 right-2 p-1.5 text-slate-400 hover:text-green-500 hover:bg-green-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
-                                            title="Restore"
-                                        >
-                                            <RotateCcw className="w-3.5 h-3.5" />
-                                        </button>
+                                        <div className="absolute top-2 right-2 flex gap-1 group-hover:opacity-100 transition-all">
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); handleRestore(folder._id, 'folder'); }}
+                                                className="p-1.5 text-slate-400 hover:text-green-500 hover:bg-green-50 rounded-lg"
+                                                title="Restore"
+                                            >
+                                                <RotateCcw className="w-3.5 h-3.5" />
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); handleDeletePermanent(folder._id, 'folder'); }}
+                                                className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg"
+                                                title="Delete Forever"
+                                            >
+                                                <X className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
                                     ) : (
                                         <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
                                             <button
@@ -460,13 +529,22 @@ const SecureDrive = () => {
 
                                     <div className="absolute top-2 right-2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-all bg-white/90 rounded-lg p-1 shadow-sm">
                                         {viewTrash ? (
-                                            <button
-                                                onClick={() => handleRestore(file._id, 'file')}
-                                                className="p-1.5 text-slate-500 hover:text-green-600 hover:bg-green-50 rounded-md"
-                                                title="Restore"
-                                            >
-                                                <RotateCcw className="w-3.5 h-3.5" />
-                                            </button>
+                                            <>
+                                                <button
+                                                    onClick={() => handleRestore(file._id, 'file')}
+                                                    className="p-1.5 text-slate-500 hover:text-green-600 hover:bg-green-50 rounded-md"
+                                                    title="Restore"
+                                                >
+                                                    <RotateCcw className="w-3.5 h-3.5" />
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDeletePermanent(file._id, 'file')}
+                                                    className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-md"
+                                                    title="Delete Forever"
+                                                >
+                                                    <X className="w-3.5 h-3.5" />
+                                                </button>
+                                            </>
                                         ) : (
                                             <>
                                                 <button
@@ -476,13 +554,25 @@ const SecureDrive = () => {
                                                 >
                                                     <Download className="w-3.5 h-3.5" />
                                                 </button>
+
                                                 <button
                                                     onClick={() => handleShare(file._id)}
-                                                    className="p-1.5 text-slate-500 hover:text-green-600 hover:bg-green-50 rounded-md"
-                                                    title="Share Public Link"
+                                                    className={`p-1.5 rounded-md ${file.isPublic ? 'text-green-600 bg-green-50' : 'text-slate-500 hover:text-green-600 hover:bg-green-50'}`}
+                                                    title={file.isPublic ? "Copy Public Link" : "Share Public Link"}
                                                 >
                                                     <Share2 className="w-3.5 h-3.5" />
                                                 </button>
+
+                                                {file.isPublic && (
+                                                    <button
+                                                        onClick={() => handleRevokeShare(file._id)}
+                                                        className="p-1.5 text-red-500 hover:bg-red-50 rounded-md"
+                                                        title="Revoke Public Access"
+                                                    >
+                                                        <XCircle className="w-3.5 h-3.5" />
+                                                    </button>
+                                                )}
+
                                                 <button
                                                     onClick={() => handleRename(file._id, 'file', file.name)}
                                                     className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-md"

@@ -10,7 +10,9 @@ import {
   shareItem,
   getPublicFile,
   restoreItem,
-  renameItem
+  renameItem,
+  deletePermanent,
+  revokeShare
 } from '../controllers/driveController.js';
 
 const router = express.Router();
@@ -28,5 +30,7 @@ router.post('/delete', deleteItem);
 router.post('/share', shareItem);
 router.post('/restore', restoreItem);
 router.post('/rename', renameItem);
+router.post('/delete-permanent', deletePermanent);
+router.post('/revoke-share', revokeShare);
 
 export default router;

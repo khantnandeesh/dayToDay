@@ -1,9 +1,23 @@
 import { X, Download, FileText, Image as ImageIcon, Film, Loader } from 'lucide-react';
+import PDFViewer from './PDFViewer';
 
 const FilePreview = ({ file, url, onClose, loading }) => {
     if (!file) return null;
 
     const { mimeType, name } = file;
+
+    // Special handling for PDF to provide a full immersive experience
+    if (!loading && url && mimeType === 'application/pdf') {
+        return (
+            <div className="fixed inset-0 z-[60] bg-black animate-fadeIn">
+                <PDFViewer
+                    url={url}
+                    fileName={name}
+                    onClose={onClose}
+                />
+            </div>
+        );
+    }
 
     const renderContent = () => {
         if (loading) {
@@ -37,16 +51,6 @@ const FilePreview = ({ file, url, onClose, loading }) => {
                     <source src={url} type={mimeType} />
                     Your browser does not support the video tag.
                 </video>
-            );
-        }
-
-        if (mimeType === 'application/pdf') {
-            return (
-                <iframe
-                    src={`${url}#toolbar=0`}
-                    className="w-full h-[80vh] bg-white rounded-lg shadow-2xl"
-                    title="PDF Preview"
-                />
             );
         }
 

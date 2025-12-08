@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import StickyNotes from '../components/StickyNotes';
 import { useAuth } from '../context/AuthContext';
 import { Shield, HardDrive } from 'lucide-react';
 
@@ -44,6 +45,7 @@ const Dashboard = () => {
                     </div>
                 </div>
             </div>
+            <StickyNotes />
         </div>
     );
 };

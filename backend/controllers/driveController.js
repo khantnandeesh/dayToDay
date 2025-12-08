@@ -279,3 +279,81 @@ export const getPublicFile = async (req, res) => {
     res.status(500).json({ message: 'Error accessing shared file' });
   }
 };
+// 11. Delete Permanently
+export const deletePermanent = async (req, res) => {
+  try {
+    const { id, type } = req.body;
+    
+    if (type === 'file') {
+      const file = await DriveFile.findOne({ _id: id, user: req.user.id });
+      if (file) {
+        // Delete from R2
+        try {
+            await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: file.r2Key }));
+        } catch (e) {
+            console.error("R2 Delete Error", e);
+        }
+        await file.deleteOne();
+      }
+    } else {
+      // Recursive delete for folder
+      // 1. Find all sub-files and delete from R2 and DB
+      const filesToDelete = await DriveFile.find({ folder: id, user: req.user.id });
+      for (const file of filesToDelete) {
+         try {
+            await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: file.r2Key }));
+         } catch (e) {
+            console.error("R2 Delete Error", e);
+         }
+         await file.deleteOne();
+      }
+      
+      // 2. Delete Folder (and potentially sub-folders... strict recursion needed for nested folders but simple one-level check or assuming DB cascade? No, Mongo doesn't cascade)
+      // For now, let's just delete the folder doc. A proper implementation would need to recursively find all subfolders.
+      // Let's do a basic recursive finder? Or just delete the folder and let orphans be? 
+      // Better: Prevent folder delete if not empty? Or simple recursive delete.
+      
+      // Simple Recursive Delete:
+      const deleteFolderRecursive = async (folderId) => {
+          // Find subfolders
+          const subfolders = await DriveFolder.find({ parent: folderId, user: req.user.id });
+          for (const sub of subfolders) {
+              await deleteFolderRecursive(sub._id);
+          }
+          
+          // Delete files in this folder
+          const files = await DriveFile.find({ folder: folderId, user: req.user.id });
+          for (const f of files) {
+              try {
+                await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: f.r2Key }));
+              } catch (e) { console.error(e); }
+              await f.deleteOne();
+          }
+          
+          // Delete self
+          await DriveFolder.deleteOne({ _id: folderId });
+      };
+      
+      await deleteFolderRecursive(id);
+    }
+
+    res.json({ message: 'Item deleted permanently' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Error deleting permanently' });
+  }
+};
+
+// 12. Revoke Share
+export const revokeShare = async (req, res) => {
+    try {
+        const { id } = req.body;
+        await DriveFile.findOneAndUpdate(
+            { _id: id, user: req.user.id },
+            { isPublic: false, shareToken: null, shareExpires: null }
+        );
+        res.json({ message: 'Public link revoked' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error revoking link' });
+    }
+};
