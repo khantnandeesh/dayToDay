@@ -7,6 +7,7 @@ import authRoutes from './routes/authRoutes.js';
 import vaultRoutes from './routes/vaultRoutes.js';
 import driveRoutes from './routes/driveRoutes.js';
 import AllowedOrigin from './models/AllowedOrigin.js'; // Added for dynamic CORS
+import { authenticateMcpRequest, buildServer, mcpTransports } from './mcp/server.js'; // MCP Server (SSE)
 
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
@@ -147,6 +148,41 @@ app.use(cookieParser());
 app.use('/api/auth', authRoutes);
 app.use('/api/vault', vaultRoutes);
 app.use('/api/drive', driveRoutes);
+
+// ---------------------------------------------------------------------------
+// MCP Server (Model Context Protocol) over SSE — single port, auth-bound.
+// GET  /mcp/sse      -> establishes the SSE stream (auth required)
+// POST /mcp/messages -> client -> server messages, routed by ?sessionId
+// Both endpoints are protected by authenticateMcpRequest, which enforces a
+// valid JWT + active session. Each connection gets its own Server instance
+// scoped to req.userId, so tools can only touch that user's data.
+// ---------------------------------------------------------------------------
+app.get('/mcp/sse', authenticateMcpRequest, async (req, res) => {
+  const transport = new SSEServerTransport('/mcp/messages', res);
+  const server = buildServer(req.userId);
+
+  mcpTransports.set(transport.sessionId, { transport, server });
+
+  res.on('close', () => {
+    mcpTransports.delete(transport.sessionId);
+  });
+
+  await server.connect(transport);
+});
+
+app.post('/mcp/messages', authenticateMcpRequest, async (req, res) => {
+  const sessionId = req.query.sessionId;
+  const entry = mcpTransports.get(sessionId);
+
+  if (!entry) {
+    return res.status(404).json({
+      success: false,
+      message: 'Unknown or expired MCP session',
+    });
+  }
+
+  await entry.transport.handlePostMessage(req, res);
+});
 
 // Health check
 app.get('/health', async(req, res) => {
