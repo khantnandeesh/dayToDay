@@ -147,6 +147,10 @@ const mcpCors = (req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  // helmet() sets Cross-Origin-Resource-Policy: same-origin, which makes a
+  // cross-origin browser EventSource (Gemini's UI) refuse the stream. Override
+  // it for these Bearer/OAuth-authenticated routes so the SSE stream is readable.
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 };
