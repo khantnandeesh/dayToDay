@@ -7,6 +7,7 @@ import authRoutes from './routes/authRoutes.js';
 import vaultRoutes from './routes/vaultRoutes.js';
 import driveRoutes from './routes/driveRoutes.js';
 import AllowedOrigin from './models/AllowedOrigin.js'; // Added for dynamic CORS
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { authenticateMcpRequest, buildServer, mcpTransports } from './mcp/server.js'; // MCP Server (SSE)
 
 import helmet from 'helmet';
