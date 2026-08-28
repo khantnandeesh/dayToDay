@@ -159,25 +159,21 @@ app.use('/api/drive', driveRoutes);
 // scoped to req.userId, so tools can only touch that user's data.
 // ---------------------------------------------------------------------------
 // GET opens the SSE stream WITHOUT requiring auth so clients (and Gemini's
-// "valid MCP server" preflight) can receive the `endpoint` event. The user is
-// bound to the Server instance on the first authenticated POST /mcp/messages.
+// "valid MCP server" preflight) receive the `event: endpoint` response. The
+// Server is connected here, but ctx.userId stays null until the first
+// authenticated POST /mcp/messages binds the real user.
 app.get('/mcp/sse', async (req, res) => {
+  const ctx = { userId: null };
   const transport = new SSEServerTransport('/mcp/messages', res);
-  let server = null;
-  try {
-    const userId = await resolveUserId(req); // bind early if token supplied
-    server = buildServer(userId);
-  } catch {
-    server = null; // anonymous preflight: stream opens, no tools until auth
-  }
+  const server = buildServer(ctx);
 
-  mcpTransports.set(transport.sessionId, { transport, server });
+  mcpTransports.set(transport.sessionId, { transport, server, ctx });
 
   res.on('close', () => {
     mcpTransports.delete(transport.sessionId);
   });
 
-  if (server) await server.connect(transport);
+  await server.connect(transport); // emits the endpoint event
 });
 
 app.post('/mcp/messages', async (req, res) => {
@@ -198,11 +194,8 @@ app.post('/mcp/messages', async (req, res) => {
     return res.status(401).json({ success: false, message: 'Unauthorized' });
   }
 
-  // Lazily build + connect the user-scoped Server on the first real message.
-  if (!entry.server) {
-    entry.server = buildServer(userId);
-    await entry.server.connect(entry.transport);
-  }
+  // Bind the authenticated user to this connection's Server.
+  entry.ctx.userId = userId;
 
   await entry.transport.handlePostMessage(req, res);
 });

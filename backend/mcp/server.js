@@ -349,9 +349,12 @@ function jsonResult(data, isError = false) {
   };
 }
 
-// Build a fresh MCP Server scoped to a single authenticated user.
-// The `userId` is closed over, so every tool call is inherently scoped.
-function buildServer(userId) {
+// Build a fresh MCP Server. `ctx` is a mutable per-connection object
+// ({ userId: null }). The server is connected on the (possibly anonymous) SSE
+// GET so the endpoint event is emitted; the real user is bound by setting
+// ctx.userId on the first authenticated POST /mcp/messages. Every tool call is
+// therefore inherently scoped to that user.
+function buildServer(ctx) {
   const server = new Server(
     { name: 'daytoday-mcp', version: '1.0.0' },
     { capabilities: { tools: {} } }
@@ -398,11 +401,19 @@ function buildServer(userId) {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
+    // Tools require an authenticated, bound user.
+    if (!ctx.userId) {
+      return jsonResult(
+        { success: false, error: 'Not authenticated' },
+        true
+      );
+    }
+
     try {
       switch (name) {
         // -------------------------------------------------------------------
         case 'get_security_profile': {
-          const u = await User.findById(userId).select(
+          const u = await User.findById(ctx.userId).select(
             '-password -twoFactorCode -twoFactorCodeExpires'
           );
           if (!u) throw new Error('User not found');
@@ -419,7 +430,7 @@ function buildServer(userId) {
         // -------------------------------------------------------------------
         case 'list_active_devices': {
           const sessions = await Session.find({
-            userId,
+            userId: ctx.userId,
             isActive: true,
           }).sort({ createdAt: -1 });
 
@@ -445,7 +456,7 @@ function buildServer(userId) {
           // Ownership enforced by filtering on userId.
           const session = await Session.findOne({
             _id: sessionId,
-            userId,
+            userId: ctx.userId,
             isActive: true,
           });
           if (!session) {
@@ -463,7 +474,7 @@ function buildServer(userId) {
           await session.save();
 
           // Keep the user's trusted-device list in sync.
-          const u = await User.findById(userId);
+          const u = await User.findById(ctx.userId);
           if (u && u.devices?.some((d) => d.deviceId === session.deviceId)) {
             u.devices = u.devices.filter(
               (d) => d.deviceId !== session.deviceId
@@ -481,7 +492,7 @@ function buildServer(userId) {
         // -------------------------------------------------------------------
         case 'get_account_audit_log': {
           const u = await User
-            .findById(userId)
+            .findById(ctx.userId)
             .select('devices');
           const recentDevices = (u?.devices || [])
             .map((d) => ({
@@ -497,7 +508,7 @@ function buildServer(userId) {
             );
 
           const activeSessions = await Session.find({
-            userId,
+            userId: ctx.userId,
             isActive: true,
           }).select('deviceInfo createdAt expiresAt');
 
