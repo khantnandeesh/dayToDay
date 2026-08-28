@@ -35,23 +35,30 @@ export async function authenticateMcpRequest(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Enforce an active, non-expired session (mirrors middleware/auth.js).
-    const session = await Session.findOne({
-      token,
-      userId: decoded.id,
-      isActive: true,
-    });
-    if (!session || !session.isValid()) {
-      return res
-        .status(401)
-        .json({ success: false, message: 'Session expired or invalid' });
+    let user;
+    if (decoded.mcp) {
+      // OAuth-issued access token (Gemini / custom connected apps).
+      // No Session document exists for these; identity is the signed `id`.
+      user = await User.findById(decoded.id).select(
+        '-password -twoFactorCode -twoFactorCodeExpires'
+      );
+    } else {
+      // Enforce an active, non-expired session (mirrors middleware/auth.js).
+      const session = await Session.findOne({
+        token,
+        userId: decoded.id,
+        isActive: true,
+      });
+      if (!session || !session.isValid()) {
+        return res
+          .status(401)
+          .json({ success: false, message: 'Session expired or invalid' });
+      }
+      user = await User.findById(decoded.id).select(
+        '-password -twoFactorCode -twoFactorCodeExpires'
+      );
     }
 
-    // Password and 2FA secrets are excluded via select:false on the schema,
-    // so req.user can never leak credentials.
-    const user = await User.findById(decoded.id).select(
-      '-password -twoFactorCode -twoFactorCodeExpires'
-    );
     if (!user || !user.isActive) {
       return res
         .status(401)
@@ -68,6 +75,72 @@ export async function authenticateMcpRequest(req, res, next) {
       .status(401)
       .json({ success: false, message: 'Unauthorized' });
   }
+}
+
+// ---------------------------------------------------------------------------
+// OAuth 2.0 (client_credentials) — for Gemini "custom connected apps".
+// Gemini discovers this via /.well-known/oauth-authorization-server, then POSTs
+// client_id + client_secret to /oauth/token and receives a user-scoped JWT.
+// ---------------------------------------------------------------------------
+export function oauthMetadata(req, res) {
+  const base = process.env.BACKEND_URL || `https://${req.headers.host}`;
+  res.json({
+    issuer: base,
+    authorization_endpoint: `${base}/oauth/authorize`,
+    token_endpoint: `${base}/oauth/token`,
+    grant_types_supported: ['client_credentials'],
+    token_endpoint_auth_methods_supported: [
+      'client_secret_basic',
+      'client_secret_post',
+    ],
+    response_types_supported: ['token'],
+    scopes_supported: ['mcp'],
+  });
+}
+
+export async function oauthToken(req, res) {
+  let clientId;
+  let clientSecret;
+
+  const auth = req.headers.authorization;
+  if (auth && auth.startsWith('Basic ')) {
+    const decoded = Buffer.from(auth.slice(6), 'base64').toString('utf8');
+    const idx = decoded.indexOf(':');
+    clientId = decoded.slice(0, idx);
+    clientSecret = decoded.slice(idx + 1);
+  } else {
+    clientId = req.body?.client_id;
+    clientSecret = req.body?.client_secret;
+  }
+
+  if (
+    !process.env.MCP_CLIENT_ID ||
+    !process.env.MCP_CLIENT_SECRET ||
+    clientId !== process.env.MCP_CLIENT_ID ||
+    clientSecret !== process.env.MCP_CLIENT_SECRET
+  ) {
+    return res.status(401).json({ error: 'invalid_client' });
+  }
+
+  const userId = process.env.MCP_OAUTH_USER_ID;
+  if (!userId) {
+    return res.status(500).json({ error: 'server_misconfigured' });
+  }
+
+  // Mint a user-scoped JWT carrying the `mcp` claim so authenticateMcpRequest
+  // can skip the (nonexistent) Session lookup for OAuth tokens.
+  const accessToken = jwt.sign(
+    { id: userId, mcp: true },
+    process.env.JWT_SECRET,
+    { expiresIn: '720h' }
+  );
+
+  return res.json({
+    access_token: accessToken,
+    token_type: 'Bearer',
+    expires_in: 720 * 3600,
+    scope: 'mcp',
+  });
 }
 
 // ---------------------------------------------------------------------------

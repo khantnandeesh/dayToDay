@@ -8,7 +8,7 @@ import vaultRoutes from './routes/vaultRoutes.js';
 import driveRoutes from './routes/driveRoutes.js';
 import AllowedOrigin from './models/AllowedOrigin.js'; // Added for dynamic CORS
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { authenticateMcpRequest, buildServer, mcpTransports } from './mcp/server.js'; // MCP Server (SSE)
+import { authenticateMcpRequest, buildServer, mcpTransports, oauthMetadata, oauthToken } from './mcp/server.js'; // MCP Server (SSE) + OAuth
 
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
@@ -184,6 +184,13 @@ app.post('/mcp/messages', authenticateMcpRequest, async (req, res) => {
 
   await entry.transport.handlePostMessage(req, res);
 });
+
+// ---------------------------------------------------------------------------
+// MCP OAuth 2.0 (client_credentials) — lets Gemini's "custom connected app"
+// exchange Client ID + Secret for a user-scoped access token.
+// ---------------------------------------------------------------------------
+app.get('/.well-known/oauth-authorization-server', oauthMetadata);
+app.post('/oauth/token', oauthToken);
 
 // Health check
 app.get('/health', async(req, res) => {
