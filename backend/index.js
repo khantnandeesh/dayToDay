@@ -139,8 +139,28 @@ const corsOptions = {
     credentials: true,
 };
 
-// Apply CORS to remaining routes (API)
-app.use(cors(corsOptions));
+// Apply CORS. The MCP SSE endpoint is consumed by Gemini's browser-based
+// "connected app" UI via cross-origin EventSource, so those routes get
+// permissive CORS (Bearer/OAuth-authenticated, so open CORS is safe).
+// Everything else keeps the stricter origin allow-list.
+const mcpCors = (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+};
+
+app.use((req, res, next) => {
+  if (
+    req.path.startsWith('/mcp') ||
+    req.path.startsWith('/oauth') ||
+    req.path.startsWith('/.well-known')
+  ) {
+    return mcpCors(req, res, next);
+  }
+  return cors(corsOptions)(req, res, next);
+});
 
 connectDB();
 app.use(cookieParser());
