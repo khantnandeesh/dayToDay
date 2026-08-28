@@ -119,7 +119,10 @@ export async function resolveUserId(req) {
 // client_id + client_secret to /oauth/token and receives a user-scoped JWT.
 // ---------------------------------------------------------------------------
 export function oauthMetadata(req, res) {
-  const base = process.env.BACKEND_URL || `https://${req.headers.host}`;
+  // IMPORTANT: use the real public host, never BACKEND_URL (which is
+  // http://localhost:3000 in prod). Gemini follows these URLs, so they must
+  // be the publicly reachable origin.
+  const base = process.env.MCP_PUBLIC_URL || `https://${req.headers.host}`;
   res.json({
     issuer: base,
     authorization_endpoint: `${base}/oauth/authorize`,
