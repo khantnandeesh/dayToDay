@@ -3,6 +3,7 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import User from '../models/User.js';
 import Session from '../models/Session.js';
 
@@ -88,14 +89,128 @@ export function oauthMetadata(req, res) {
     issuer: base,
     authorization_endpoint: `${base}/oauth/authorize`,
     token_endpoint: `${base}/oauth/token`,
-    grant_types_supported: ['client_credentials'],
+    grant_types_supported: ['authorization_code', 'client_credentials'],
     token_endpoint_auth_methods_supported: [
       'client_secret_basic',
       'client_secret_post',
     ],
-    response_types_supported: ['token'],
+    response_types_supported: ['code'],
+    code_challenge_methods_supported: ['S256'],
     scopes_supported: ['mcp'],
   });
+}
+
+// ---------------------------------------------------------------------------
+// Authorization endpoint (Authorization Code flow with PKCE).
+// Gemini redirects the user's browser here; we authenticate the user (reusing
+// an existing session cookie if present, otherwise a minimal login form) and
+// redirect back to Google's redirect_uri with a short-lived `code`. The code is
+// a signed JWT (no server-side state needed, works across Heroku dynos).
+// ---------------------------------------------------------------------------
+function renderLoginForm(params) {
+  const hidden = Object.entries(params)
+    .map(([k, v]) => `<input type="hidden" name="${k}" value="${String(v).replace(/"/g, '&quot;')}">`)
+    .join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Authorize DayToDay MCP</title>
+  <style>body{font-family:system-ui,sans-serif;background:#f5f5f5;display:flex;min-height:100vh;align-items:center;justify-content:center}
+  .card{background:#fff;padding:32px 28px;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.08);width:340px}
+  h1{font-size:18px;margin:0 0 4px} p{color:#666;font-size:13px;margin:0 0 20px}
+  input{width:100%;padding:10px 12px;margin-bottom:12px;border:1px solid #ddd;border-radius:8px;box-sizing:border-box}
+  button{width:100%;padding:11px;background:#111;color:#fff;border:0;border-radius:8px;font-weight:600;cursor:pointer}
+  .muted{font-size:11px;color:#999;margin-top:14px}</style></head>
+  <body><form class="card" method="post">
+    <h1>Connect DayToDay to Gemini</h1>
+    <p>Sign in to grant Gemini access to your account.</p>
+    ${hidden}
+    <input name="email" type="email" placeholder="Email" autocomplete="username" required>
+    <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button type="submit">Authorize</button>
+    <div class="muted">DayToDay Secure Vault &bull; MCP OAuth</div>
+  </form></body></html>`;
+}
+
+export async function oauthAuthorize(req, res) {
+  const q =
+    req.method === 'POST'
+      ? { ...req.query, ...req.body }
+      : req.query;
+
+  const {
+    response_type,
+    client_id,
+    redirect_uri,
+    state,
+    code_challenge,
+    code_challenge_method,
+    scope,
+  } = q;
+
+  // Already authenticated via an active session cookie? Short-circuit.
+  if (req.cookies?.token) {
+    try {
+      const d = jwt.verify(req.cookies.token, process.env.JWT_SECRET);
+      const sess = await Session.findOne({
+        token: req.cookies.token,
+        userId: d.id,
+        isActive: true,
+      });
+      if (sess && sess.isValid()) {
+        return finishAuthorize(res, d.id, {
+          client_id,
+          redirect_uri,
+          state,
+          code_challenge,
+        });
+      }
+    } catch {
+      /* fall through to login form */
+    }
+  }
+
+  // GET without auth -> show login form.
+  if (req.method !== 'POST') {
+    res.setHeader('Content-Type', 'text/html');
+    return res.send(renderLoginForm(q));
+  }
+
+  // POST -> verify credentials, then issue code.
+  const { email, password } = req.body || {};
+  const user = await User.findOne({ email }).select('+password');
+  if (!user || !(await user.comparePassword(password))) {
+    res.status(401).setHeader('Content-Type', 'text/html');
+    return res.send(
+      renderLoginForm({ ...q, error: '1' }) +
+        '<p style="color:#c00;font-size:12px">Invalid email or password.</p>'
+    );
+  }
+
+  return finishAuthorize(res, user._id, {
+    client_id,
+    redirect_uri,
+    state,
+    code_challenge,
+  });
+}
+
+function finishAuthorize(res, userId, { client_id, redirect_uri, state, code_challenge }) {
+  const code = jwt.sign(
+    {
+      sub: userId.toString(),
+      azp: client_id,
+      cch: code_challenge || null,
+      typ: 'azc',
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: '5m' }
+  );
+  try {
+    const url = new URL(redirect_uri);
+    url.searchParams.set('code', code);
+    if (state) url.searchParams.set('state', state);
+    return res.redirect(url.toString());
+  } catch {
+    return res.status(400).json({ error: 'invalid_redirect_uri' });
+  }
 }
 
 export async function oauthToken(req, res) {
@@ -122,25 +237,66 @@ export async function oauthToken(req, res) {
     return res.status(401).json({ error: 'invalid_client' });
   }
 
-  const userId = process.env.MCP_OAUTH_USER_ID;
-  if (!userId) {
-    return res.status(500).json({ error: 'server_misconfigured' });
+  const grantType = req.body?.grant_type;
+
+  // --- Authorization Code grant (Gemini's user-bound flow) ---
+  if (grantType === 'authorization_code') {
+    const code = req.body?.code;
+    const verifier = req.body?.code_verifier;
+    let cd;
+    try {
+      cd = jwt.verify(code, process.env.JWT_SECRET);
+    } catch {
+      return res.status(400).json({ error: 'invalid_grant' });
+    }
+    if (cd.typ !== 'azc' || cd.azp !== clientId) {
+      return res.status(400).json({ error: 'invalid_grant' });
+    }
+    if (cd.cch) {
+      const expected = crypto
+        .createHash('sha256')
+        .update(verifier || '')
+        .digest('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+      if (expected !== cd.cch) {
+        return res.status(400).json({ error: 'invalid_grant' });
+      }
+    }
+    const accessToken = jwt.sign(
+      { id: cd.sub, mcp: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '720h' }
+    );
+    return res.json({
+      access_token: accessToken,
+      token_type: 'Bearer',
+      expires_in: 720 * 3600,
+      scope: 'mcp',
+    });
   }
 
-  // Mint a user-scoped JWT carrying the `mcp` claim so authenticateMcpRequest
-  // can skip the (nonexistent) Session lookup for OAuth tokens.
-  const accessToken = jwt.sign(
-    { id: userId, mcp: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '720h' }
-  );
+  // --- Client Credentials grant (fixed service user) ---
+  if (grantType === 'client_credentials') {
+    const userId = process.env.MCP_OAUTH_USER_ID;
+    if (!userId) {
+      return res.status(500).json({ error: 'server_misconfigured' });
+    }
+    const accessToken = jwt.sign(
+      { id: userId, mcp: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '720h' }
+    );
+    return res.json({
+      access_token: accessToken,
+      token_type: 'Bearer',
+      expires_in: 720 * 3600,
+      scope: 'mcp',
+    });
+  }
 
-  return res.json({
-    access_token: accessToken,
-    token_type: 'Bearer',
-    expires_in: 720 * 3600,
-    scope: 'mcp',
-  });
+  return res.status(400).json({ error: 'unsupported_grant_type' });
 }
 
 // ---------------------------------------------------------------------------

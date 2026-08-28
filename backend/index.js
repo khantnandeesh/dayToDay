@@ -8,7 +8,7 @@ import vaultRoutes from './routes/vaultRoutes.js';
 import driveRoutes from './routes/driveRoutes.js';
 import AllowedOrigin from './models/AllowedOrigin.js'; // Added for dynamic CORS
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { authenticateMcpRequest, buildServer, mcpTransports, oauthMetadata, oauthToken } from './mcp/server.js'; // MCP Server (SSE) + OAuth
+import { authenticateMcpRequest, buildServer, mcpTransports, oauthMetadata, oauthToken, oauthAuthorize } from './mcp/server.js'; // MCP Server (SSE) + OAuth
 
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
@@ -191,6 +191,8 @@ app.post('/mcp/messages', authenticateMcpRequest, async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/.well-known/oauth-authorization-server', oauthMetadata);
 app.post('/oauth/token', oauthToken);
+app.get('/oauth/authorize', oauthAuthorize);
+app.post('/oauth/authorize', oauthAuthorize);
 
 // Health check
 app.get('/health', async(req, res) => {
