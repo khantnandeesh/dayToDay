@@ -78,6 +78,41 @@ export async function authenticateMcpRequest(req, res, next) {
   }
 }
 
+// Resolve the authenticated user id from a request (Bearer header / cookie / ?token).
+// Throws if missing or invalid. Supports both session JWTs and OAuth `mcp` tokens.
+export async function resolveUserId(req) {
+  let token =
+    (req.headers.authorization && req.headers.authorization.startsWith('Bearer')
+      ? req.headers.authorization.split(' ')[1]
+      : null) ||
+    req.query.token ||
+    req.cookies?.token;
+
+  if (!token) throw new Error('missing_token');
+
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+  let user;
+  if (decoded.mcp) {
+    user = await User.findById(decoded.id).select(
+      '-password -twoFactorCode -twoFactorCodeExpires'
+    );
+  } else {
+    const session = await Session.findOne({
+      token,
+      userId: decoded.id,
+      isActive: true,
+    });
+    if (!session || !session.isValid()) throw new Error('bad_session');
+    user = await User.findById(decoded.id).select(
+      '-password -twoFactorCode -twoFactorCodeExpires'
+    );
+  }
+
+  if (!user || !user.isActive) throw new Error('no_user');
+  return user._id;
+}
+
 // ---------------------------------------------------------------------------
 // OAuth 2.0 (client_credentials) — for Gemini "custom connected apps".
 // Gemini discovers this via /.well-known/oauth-authorization-server, then POSTs

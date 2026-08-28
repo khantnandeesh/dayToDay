@@ -8,7 +8,7 @@ import vaultRoutes from './routes/vaultRoutes.js';
 import driveRoutes from './routes/driveRoutes.js';
 import AllowedOrigin from './models/AllowedOrigin.js'; // Added for dynamic CORS
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { authenticateMcpRequest, buildServer, mcpTransports, oauthMetadata, oauthToken, oauthAuthorize } from './mcp/server.js'; // MCP Server (SSE) + OAuth
+import { authenticateMcpRequest, buildServer, mcpTransports, oauthMetadata, oauthToken, oauthAuthorize, resolveUserId } from './mcp/server.js'; // MCP Server (SSE) + OAuth
 
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
@@ -158,9 +158,18 @@ app.use('/api/drive', driveRoutes);
 // valid JWT + active session. Each connection gets its own Server instance
 // scoped to req.userId, so tools can only touch that user's data.
 // ---------------------------------------------------------------------------
-app.get('/mcp/sse', authenticateMcpRequest, async (req, res) => {
+// GET opens the SSE stream WITHOUT requiring auth so clients (and Gemini's
+// "valid MCP server" preflight) can receive the `endpoint` event. The user is
+// bound to the Server instance on the first authenticated POST /mcp/messages.
+app.get('/mcp/sse', async (req, res) => {
   const transport = new SSEServerTransport('/mcp/messages', res);
-  const server = buildServer(req.userId);
+  let server = null;
+  try {
+    const userId = await resolveUserId(req); // bind early if token supplied
+    server = buildServer(userId);
+  } catch {
+    server = null; // anonymous preflight: stream opens, no tools until auth
+  }
 
   mcpTransports.set(transport.sessionId, { transport, server });
 
@@ -168,10 +177,10 @@ app.get('/mcp/sse', authenticateMcpRequest, async (req, res) => {
     mcpTransports.delete(transport.sessionId);
   });
 
-  await server.connect(transport);
+  if (server) await server.connect(transport);
 });
 
-app.post('/mcp/messages', authenticateMcpRequest, async (req, res) => {
+app.post('/mcp/messages', async (req, res) => {
   const sessionId = req.query.sessionId;
   const entry = mcpTransports.get(sessionId);
 
@@ -180,6 +189,19 @@ app.post('/mcp/messages', authenticateMcpRequest, async (req, res) => {
       success: false,
       message: 'Unknown or expired MCP session',
     });
+  }
+
+  let userId;
+  try {
+    userId = await resolveUserId(req);
+  } catch {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+
+  // Lazily build + connect the user-scoped Server on the first real message.
+  if (!entry.server) {
+    entry.server = buildServer(userId);
+    await entry.server.connect(entry.transport);
   }
 
   await entry.transport.handlePostMessage(req, res);
