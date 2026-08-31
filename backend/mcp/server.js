@@ -261,12 +261,13 @@ async function authenticateOAuthClient(req) {
 export async function oauthRegister(req, res) {
   const body = req.body || {};
   const redirectUris = body.redirect_uris;
-  const grantTypes = body.grant_types || ['authorization_code'];
-  const responseTypes = body.response_types || ['code'];
-  const tokenEndpointAuthMethod = body.token_endpoint_auth_method || 'client_secret_basic';
-  const requestedScopes = body.scope
-    ? String(body.scope).split(/\s+/).filter(Boolean)
-    : ['mcp'];
+  const rawGrantTypes = body.grant_types;
+  const responseTypes = Array.isArray(body.response_types) && body.response_types.length > 0
+    ? body.response_types
+    : ['code'];
+  const tokenEndpointAuthMethod = ['client_secret_basic', 'client_secret_post', 'none'].includes(body.token_endpoint_auth_method)
+    ? body.token_endpoint_auth_method
+    : 'client_secret_basic';
 
   if (
     !Array.isArray(redirectUris) ||
@@ -279,32 +280,13 @@ export async function oauthRegister(req, res) {
     });
   }
 
-  if (!Array.isArray(grantTypes) || grantTypes.some((grantType) => grantType !== 'authorization_code')) {
-    return res.status(400).json({
-      error: 'invalid_client_metadata',
-      error_description: 'Only the authorization_code grant is supported for dynamically registered clients.',
-    });
-  }
-
-  if (!Array.isArray(responseTypes) || responseTypes.length !== 1 || responseTypes[0] !== 'code') {
-    return res.status(400).json({
-      error: 'invalid_client_metadata',
-      error_description: 'Only the code response type is supported.',
-    });
-  }
-
-  if (!['client_secret_basic', 'client_secret_post', 'none'].includes(tokenEndpointAuthMethod)) {
-    return res.status(400).json({
-      error: 'invalid_client_metadata',
-      error_description: 'Use client_secret_basic, client_secret_post, or none.',
-    });
-  }
-
-  if (requestedScopes.some((scope) => scope !== 'mcp')) {
-    return res.status(400).json({
-      error: 'invalid_client_metadata',
-      error_description: 'Only the mcp scope is supported.',
-    });
+  const allowedGrants = ['authorization_code', 'refresh_token', 'client_credentials'];
+  let grantTypes = ['authorization_code', 'refresh_token'];
+  if (Array.isArray(rawGrantTypes) && rawGrantTypes.length > 0) {
+    grantTypes = rawGrantTypes.filter((g) => allowedGrants.includes(g));
+    if (grantTypes.length === 0) {
+      grantTypes = ['authorization_code', 'refresh_token'];
+    }
   }
 
   const clientId = 'daytoday_' + crypto.randomBytes(18).toString('base64url');
@@ -319,7 +301,7 @@ export async function oauthRegister(req, res) {
     clientSecretHash: await bcrypt.hash(clientSecret || crypto.randomBytes(32).toString('base64url'), 12),
     clientName,
     redirectUris,
-    grantTypes: ['authorization_code'],
+    grantTypes,
     responseTypes: ['code'],
     tokenEndpointAuthMethod,
   });
@@ -330,7 +312,7 @@ export async function oauthRegister(req, res) {
     client_secret_expires_at: 0,
     client_name: clientName,
     redirect_uris: redirectUris,
-    grant_types: ['authorization_code'],
+    grant_types: grantTypes,
     response_types: ['code'],
     token_endpoint_auth_method: tokenEndpointAuthMethod,
     scope: 'mcp',
