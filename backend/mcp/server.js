@@ -54,6 +54,66 @@ const getUserStorageUsage = async (userId) => {
 };
 
 // ---------------------------------------------------------------------------
+// Zero-Knowledge PBKDF2 & AES-256-GCM Crypto Helpers (Compatible with WebCrypto)
+// ---------------------------------------------------------------------------
+const PBKDF2_ITERATIONS = 600000;
+
+function deriveVaultKeySync(masterPassword, saltHex) {
+  const saltBuf = Buffer.from(saltHex, 'hex');
+  return crypto.pbkdf2Sync(masterPassword, saltBuf, PBKDF2_ITERATIONS, 32, 'sha256');
+}
+
+function verifyVaultKey(key, verifierB64, verifierIvHex) {
+  try {
+    const combinedBuf = Buffer.from(verifierB64, 'base64');
+    if (combinedBuf.length < 16) return false;
+    const ciphertextBuf = combinedBuf.subarray(0, combinedBuf.length - 16);
+    const authTagBuf = combinedBuf.subarray(combinedBuf.length - 16);
+    const iv = Buffer.from(verifierIvHex, 'hex');
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTagBuf);
+    let decrypted = decipher.update(ciphertextBuf, null, 'utf8');
+    decrypted += decipher.final('utf8');
+    const parsed = JSON.parse(decrypted);
+    return parsed?.status === 'valid';
+  } catch {
+    return false;
+  }
+}
+
+function decryptVaultBlobSync(encryptedDataB64, ivHex, key) {
+  const combinedBuf = Buffer.from(encryptedDataB64, 'base64');
+  if (combinedBuf.length < 16) {
+    throw new Error('Corrupted encrypted data payload.');
+  }
+  const ciphertextBuf = combinedBuf.subarray(0, combinedBuf.length - 16);
+  const authTagBuf = combinedBuf.subarray(combinedBuf.length - 16);
+  const iv = Buffer.from(ivHex, 'hex');
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTagBuf);
+  let decrypted = decipher.update(ciphertextBuf, null, 'utf8');
+  decrypted += decipher.final('utf8');
+  return JSON.parse(decrypted);
+}
+
+function encryptVaultBlobSync(payloadObj, key) {
+  const jsonStr = JSON.stringify(payloadObj);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  let encrypted = cipher.update(jsonStr, 'utf8');
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  const combined = Buffer.concat([encrypted, authTag]);
+
+  return {
+    encryptedData: combined.toString('base64'),
+    iv: iv.toString('hex'),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // MCP authentication
 // ---------------------------------------------------------------------------
 export async function authenticateMcpRequest(req, res, next) {
@@ -900,7 +960,7 @@ function buildServer(ctx) {
       },
     },
 
-    // 3. Vault & Status Tools
+    // 3. Vault & Password Management Tools
     {
       name: 'get_vault_status',
       description:
@@ -910,17 +970,227 @@ function buildServer(ctx) {
     {
       name: 'list_vault_items',
       description:
-        'List metadata of encrypted items stored in the user vault (ID, item type like login/card/note/identity, favorite flag, updated time). Note: item contents remain zero-knowledge client-encrypted for maximum security.',
+        'List metadata of encrypted items stored in the user vault (ID, item type like website/bank/wifi/note/wallet, favorite flag, updated time). Does not require master password.',
       inputSchema: {
         type: 'object',
         properties: {
           type: {
             type: 'string',
-            description: "Optional filter by item type: 'all', 'login', 'card', 'secure_note', 'identity'.",
+            description: "Optional filter by item type: 'all', 'website', 'bank', 'wifi', 'wallet', 'note', 'custom'.",
           },
           favoritesOnly: {
             type: 'boolean',
             description: 'Filter for items marked as favorite.',
+          },
+        },
+      },
+    },
+    {
+      name: 'list_passwords',
+      description:
+        'List vault password accounts and item headers. If master_password is provided, decrypts and lists account titles, usernames, websites, and field keys (with passwords masked). If master_password is omitted, returns item IDs and metadata.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          master_password: {
+            type: 'string',
+            description:
+              'Optional DayToDay Master Password. When provided, allows decrypting and listing usernames/titles. If omitted, returns item IDs and metadata or prompts for master_password.',
+          },
+          type: {
+            type: 'string',
+            description: "Optional filter by type: 'website', 'bank', 'wifi', 'wallet', 'note', 'custom'.",
+          },
+          query: {
+            type: 'string',
+            description: 'Search filter to match against item title, username, or website.',
+          },
+        },
+      },
+    },
+    {
+      name: 'get_password',
+      description:
+        'Retrieve and decrypt a specific vault item or credential (including username, password, URLs, notes, and custom fields). Requires the user master_password.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: 'The Vault Item ID or exact item Title to retrieve.',
+          },
+          master_password: {
+            type: 'string',
+            description:
+              'The user DayToDay Master Password used to decrypt this vault item. If not known, ask the user.',
+          },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'create_password',
+      description:
+        'Encrypt and save a new password or credential into the user DayToDay Vault with zero-knowledge AES-GCM encryption. Requires master_password.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: "The name/title of the credential, e.g. 'Google Account', 'GitHub', 'Chase Bank'.",
+          },
+          type: {
+            type: 'string',
+            enum: ['website', 'bank', 'wifi', 'wallet', 'note', 'custom'],
+            description: "Type of the credential. Defaults to 'website'.",
+          },
+          username: {
+            type: 'string',
+            description: 'The username, email, or login identifier.',
+          },
+          password: {
+            type: 'string',
+            description: 'The password or secret to store.',
+          },
+          website: {
+            type: 'string',
+            description: "Optional website URL, e.g. 'https://github.com'.",
+          },
+          notes: {
+            type: 'string',
+            description: 'Optional secure notes or additional info.',
+          },
+          fields: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string' },
+                value: { type: 'string' },
+                type: { type: 'string', enum: ['text', 'password', 'email', 'url', 'textarea', 'number', 'date'] },
+              },
+              required: ['label', 'value'],
+            },
+            description: 'Optional additional custom fields for this item.',
+          },
+          isFavorite: {
+            type: 'boolean',
+            description: 'Set to true to mark this credential as a favorite.',
+          },
+          master_password: {
+            type: 'string',
+            description:
+              'The user DayToDay Master Password used to encrypt the item before saving. If not provided, ask the user.',
+          },
+        },
+        required: ['title', 'password', 'master_password'],
+      },
+    },
+    {
+      name: 'update_password',
+      description:
+        'Update or modify an existing password or credential item in the vault. Encrypts the updated record using the master_password.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: 'The ID of the vault item to update.',
+          },
+          title: {
+            type: 'string',
+            description: 'Updated title/name.',
+          },
+          type: {
+            type: 'string',
+            enum: ['website', 'bank', 'wifi', 'wallet', 'note', 'custom'],
+            description: 'Updated category type.',
+          },
+          username: {
+            type: 'string',
+            description: 'Updated username or email.',
+          },
+          password: {
+            type: 'string',
+            description: 'Updated password or secret value.',
+          },
+          website: {
+            type: 'string',
+            description: 'Updated website URL.',
+          },
+          notes: {
+            type: 'string',
+            description: 'Updated secure notes.',
+          },
+          fields: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string' },
+                value: { type: 'string' },
+                type: { type: 'string', enum: ['text', 'password', 'email', 'url', 'textarea', 'number', 'date'] },
+              },
+              required: ['label', 'value'],
+            },
+            description: 'Updated custom fields list.',
+          },
+          isFavorite: {
+            type: 'boolean',
+            description: 'Mark or unmark as favorite.',
+          },
+          master_password: {
+            type: 'string',
+            description: 'The user DayToDay Master Password required to decrypt and re-encrypt the item.',
+          },
+        },
+        required: ['id', 'master_password'],
+      },
+    },
+    {
+      name: 'delete_vault_item',
+      description: 'Delete an item from the user DayToDay Vault by ID.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: 'The ID of the vault item to delete.',
+          },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'generate_password',
+      description:
+        'Generate a cryptographically secure, high-entropy password or passphrase with customizable character rules.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          length: {
+            type: 'number',
+            description: 'Length of the password (default: 20, min: 8, max: 128).',
+          },
+          includeUppercase: {
+            type: 'boolean',
+            description: 'Include uppercase letters (default: true).',
+          },
+          includeLowercase: {
+            type: 'boolean',
+            description: 'Include lowercase letters (default: true).',
+          },
+          includeNumbers: {
+            type: 'boolean',
+            description: 'Include numbers 0-9 (default: true).',
+          },
+          includeSymbols: {
+            type: 'boolean',
+            description: 'Include special characters !@#$%^&*()_+-=[]{}|;:,.<>? (default: true).',
+          },
+          avoidAmbiguous: {
+            type: 'boolean',
+            description: 'Avoid confusing characters like l, 1, I, O, 0 (default: false).',
           },
         },
       },
@@ -1342,7 +1612,7 @@ function buildServer(ctx) {
         }
 
         // -------------------------------------------------------------------
-        // 3. Vault & Status
+        // 3. Vault & Password Management
         // -------------------------------------------------------------------
         case 'get_vault_status': {
           const settings = await VaultSettings.findOne({ user: ctx.userId });
@@ -1376,6 +1646,485 @@ function buildServer(ctx) {
               createdAt: item.createdAt,
             })),
             note: 'Vault item sensitive secrets are protected with client-side zero-knowledge AES-GCM encryption.',
+          });
+        }
+
+        case 'list_passwords': {
+          const { master_password, type, query: searchQuery } = args || {};
+          const settings = await VaultSettings.findOne({ user: ctx.userId });
+          if (!settings) {
+            return jsonResult({
+              status: 'vault_not_initialized',
+              message: 'The user has not initialized their DayToDay Vault yet.',
+            });
+          }
+
+          const filter = { user: ctx.userId };
+          if (type && type !== 'all') filter.type = type;
+          const items = await VaultItem.find(filter).sort({ updatedAt: -1 });
+
+          // If no master password provided, prompt the AI agent to ask the user
+          if (!master_password) {
+            return jsonResult({
+              status: 'requires_master_password',
+              message: 'Master password is required to decrypt and view account names, usernames, and details.',
+              action_required: 'Please prompt the user for their DayToDay Master Password to view these accounts.',
+              totalEncryptedItems: items.length,
+              items: items.map((i) => ({
+                id: i._id,
+                type: i.type,
+                isFavorite: i.isFavorite,
+                updatedAt: i.updatedAt,
+              })),
+            });
+          }
+
+          // Verify master password
+          const key = deriveVaultKeySync(master_password, settings.salt);
+          const isValidKey = verifyVaultKey(key, settings.verifier, settings.verifierIv);
+          if (!isValidKey) {
+            return jsonResult(
+              {
+                status: 'invalid_master_password',
+                error: 'The provided Master Password is incorrect. Please ask the user to verify their Master Password.',
+              },
+              true
+            );
+          }
+
+          const decryptedList = [];
+          for (const item of items) {
+            try {
+              const data = decryptVaultBlobSync(item.encryptedData, item.iv, key);
+              const title = data.title || 'Untitled';
+              const usernameField = data.fields?.find(
+                (f) =>
+                  f.type === 'email' ||
+                  f.label?.toLowerCase().includes('username') ||
+                  f.label?.toLowerCase().includes('email') ||
+                  f.label?.toLowerCase().includes('account')
+              );
+              const websiteField = data.fields?.find(
+                (f) => f.type === 'url' || f.label?.toLowerCase().includes('url') || f.label?.toLowerCase().includes('website')
+              );
+
+              const summaryItem = {
+                id: item._id,
+                type: item.type,
+                title,
+                username: usernameField?.value || data.username || '',
+                website: websiteField?.value || data.website || '',
+                notesSnippet: data.notes ? data.notes.slice(0, 40) : '',
+                fieldCount: data.fields?.length || 0,
+                isFavorite: item.isFavorite,
+                updatedAt: item.updatedAt,
+              };
+
+              if (searchQuery) {
+                const q = searchQuery.toLowerCase();
+                const matches =
+                  summaryItem.title.toLowerCase().includes(q) ||
+                  summaryItem.username.toLowerCase().includes(q) ||
+                  summaryItem.website.toLowerCase().includes(q) ||
+                  summaryItem.type.toLowerCase().includes(q);
+                if (!matches) continue;
+              }
+
+              decryptedList.push(summaryItem);
+            } catch (err) {
+              decryptedList.push({
+                id: item._id,
+                type: item.type,
+                title: '[Decryption Error]',
+                isFavorite: item.isFavorite,
+                updatedAt: item.updatedAt,
+              });
+            }
+          }
+
+          return jsonResult({
+            count: decryptedList.length,
+            items: decryptedList,
+            hint: 'To reveal full secret credentials or passwords for an item, call get_password with the item id.',
+          });
+        }
+
+        case 'get_password': {
+          const { id, master_password } = args || {};
+          if (!id) throw new Error('Vault item ID (or title) is required.');
+
+          const settings = await VaultSettings.findOne({ user: ctx.userId });
+          if (!settings) {
+            return jsonResult({
+              status: 'vault_not_initialized',
+              message: 'The user has not initialized their DayToDay Vault yet.',
+            });
+          }
+
+          if (!master_password) {
+            return jsonResult({
+              status: 'requires_master_password',
+              message: `To view and decrypt credential '${id}', please prompt the user for their DayToDay Master Password.`,
+              action_required: 'Ask the user: "Please provide your DayToDay Master Password to unlock and view this credential."',
+            });
+          }
+
+          const key = deriveVaultKeySync(master_password, settings.salt);
+          const isValidKey = verifyVaultKey(key, settings.verifier, settings.verifierIv);
+          if (!isValidKey) {
+            return jsonResult(
+              {
+                status: 'invalid_master_password',
+                error: 'The provided Master Password is incorrect. Please ask the user to verify their Master Password.',
+              },
+              true
+            );
+          }
+
+          let item = null;
+          // Try finding by ObjectId first
+          if (id.match(/^[0-9a-fA-F]{24}$/)) {
+            item = await VaultItem.findOne({ _id: id, user: ctx.userId });
+          }
+
+          // If not found by ID, search through decrypted items by title match
+          if (!item) {
+            const allItems = await VaultItem.find({ user: ctx.userId });
+            for (const candidate of allItems) {
+              try {
+                const dec = decryptVaultBlobSync(candidate.encryptedData, candidate.iv, key);
+                if (dec.title?.toLowerCase() === id.toLowerCase()) {
+                  item = candidate;
+                  break;
+                }
+              } catch {}
+            }
+          }
+
+          if (!item) {
+            return jsonResult(
+              { success: false, error: `Vault item '${id}' was not found in user vault.` },
+              true
+            );
+          }
+
+          const decryptedData = decryptVaultBlobSync(item.encryptedData, item.iv, key);
+
+          // Extract standard login fields for convenience
+          const passField = decryptedData.fields?.find(
+            (f) => f.type === 'password' || f.label?.toLowerCase().includes('password') || f.label?.toLowerCase().includes('pin')
+          );
+          const userField = decryptedData.fields?.find(
+            (f) =>
+              f.type === 'email' ||
+              f.label?.toLowerCase().includes('username') ||
+              f.label?.toLowerCase().includes('email') ||
+              f.label?.toLowerCase().includes('account')
+          );
+          const urlField = decryptedData.fields?.find(
+            (f) => f.type === 'url' || f.label?.toLowerCase().includes('url') || f.label?.toLowerCase().includes('website')
+          );
+
+          return jsonResult({
+            success: true,
+            id: item._id,
+            type: item.type,
+            title: decryptedData.title || 'Untitled',
+            username: userField?.value || decryptedData.username || '',
+            password: passField?.value || decryptedData.password || '',
+            website: urlField?.value || decryptedData.website || '',
+            notes: decryptedData.notes || '',
+            fields: decryptedData.fields || [],
+            tags: decryptedData.tags || [],
+            isFavorite: item.isFavorite,
+            updatedAt: item.updatedAt,
+            createdAt: item.createdAt,
+          });
+        }
+
+        case 'create_password': {
+          const {
+            title,
+            type = 'website',
+            username,
+            password,
+            website,
+            notes,
+            fields = [],
+            isFavorite = false,
+            master_password,
+          } = args || {};
+
+          if (!title) throw new Error('title is required');
+          if (!password) throw new Error('password is required');
+          if (!master_password) {
+            return jsonResult({
+              status: 'requires_master_password',
+              message: `To encrypt and save '${title}', please prompt the user for their DayToDay Master Password.`,
+              action_required: 'Ask the user for their DayToDay Master Password to encrypt and store this secret securely.',
+            });
+          }
+
+          const settings = await VaultSettings.findOne({ user: ctx.userId });
+          if (!settings) {
+            return jsonResult({
+              status: 'vault_not_initialized',
+              message: 'The user has not initialized their DayToDay Vault yet.',
+            });
+          }
+
+          const key = deriveVaultKeySync(master_password, settings.salt);
+          const isValidKey = verifyVaultKey(key, settings.verifier, settings.verifierIv);
+          if (!isValidKey) {
+            return jsonResult(
+              {
+                status: 'invalid_master_password',
+                error: 'The provided Master Password is incorrect. Please ask the user to verify their Master Password.',
+              },
+              true
+            );
+          }
+
+          // Build fields list
+          const assembledFields = Array.isArray(fields) ? [...fields] : [];
+          if (type === 'website' || assembledFields.length === 0) {
+            if (website && !assembledFields.some((f) => f.type === 'url' || f.label?.toLowerCase().includes('url'))) {
+              assembledFields.unshift({ label: 'Website URL', value: website, type: 'url' });
+            }
+            if (username && !assembledFields.some((f) => f.type === 'text' || f.label?.toLowerCase().includes('username') || f.label?.toLowerCase().includes('email'))) {
+              assembledFields.push({ label: 'Username/Email', value: username, type: 'text' });
+            }
+            if (password && !assembledFields.some((f) => f.type === 'password')) {
+              assembledFields.push({ label: 'Password', value: password, type: 'password' });
+            }
+          }
+
+          const payloadToEncrypt = {
+            title,
+            username: username || '',
+            website: website || '',
+            notes: notes || '',
+            fields: assembledFields,
+            tags: [],
+          };
+
+          const { encryptedData, iv } = encryptVaultBlobSync(payloadToEncrypt, key);
+
+          const newItem = await VaultItem.create({
+            user: ctx.userId,
+            type: type || 'website',
+            encryptedData,
+            iv,
+            isFavorite: Boolean(isFavorite),
+          });
+
+          return jsonResult({
+            success: true,
+            message: `Successfully created and encrypted credential '${title}' in DayToDay Vault.`,
+            id: newItem._id,
+            title,
+            type: newItem.type,
+            isFavorite: newItem.isFavorite,
+            createdAt: newItem.createdAt,
+          });
+        }
+
+        case 'update_password': {
+          const {
+            id,
+            title,
+            type,
+            username,
+            password,
+            website,
+            notes,
+            fields,
+            isFavorite,
+            master_password,
+          } = args || {};
+
+          if (!id) throw new Error('Vault Item id is required');
+          if (!master_password) {
+            return jsonResult({
+              status: 'requires_master_password',
+              message: `To update vault item '${id}', please prompt the user for their DayToDay Master Password.`,
+              action_required: 'Ask the user: "Please provide your DayToDay Master Password to authenticate this update."',
+            });
+          }
+
+          const settings = await VaultSettings.findOne({ user: ctx.userId });
+          if (!settings) {
+            return jsonResult({
+              status: 'vault_not_initialized',
+              message: 'The user has not initialized their DayToDay Vault yet.',
+            });
+          }
+
+          const key = deriveVaultKeySync(master_password, settings.salt);
+          const isValidKey = verifyVaultKey(key, settings.verifier, settings.verifierIv);
+          if (!isValidKey) {
+            return jsonResult(
+              {
+                status: 'invalid_master_password',
+                error: 'The provided Master Password is incorrect. Please ask the user to verify their Master Password.',
+              },
+              true
+            );
+          }
+
+          const item = await VaultItem.findOne({ _id: id, user: ctx.userId });
+          if (!item) {
+            return jsonResult({ success: false, error: 'Vault item not found.' }, true);
+          }
+
+          // Decrypt existing data first
+          const currentData = decryptVaultBlobSync(item.encryptedData, item.iv, key);
+
+          // Update fields
+          const updatedPayload = {
+            title: title !== undefined ? title : currentData.title,
+            username: username !== undefined ? username : currentData.username,
+            website: website !== undefined ? website : currentData.website,
+            notes: notes !== undefined ? notes : currentData.notes,
+            tags: currentData.tags || [],
+            fields: fields !== undefined ? fields : [...(currentData.fields || [])],
+          };
+
+          // If password, username, or website was explicitly updated, sync inside fields array too
+          if (password) {
+            const passIndex = updatedPayload.fields.findIndex(
+              (f) => f.type === 'password' || f.label?.toLowerCase().includes('password')
+            );
+            if (passIndex >= 0) {
+              updatedPayload.fields[passIndex].value = password;
+            } else {
+              updatedPayload.fields.push({ label: 'Password', value: password, type: 'password' });
+            }
+          }
+
+          if (username) {
+            const uIndex = updatedPayload.fields.findIndex(
+              (f) =>
+                f.type === 'email' ||
+                f.label?.toLowerCase().includes('username') ||
+                f.label?.toLowerCase().includes('email')
+            );
+            if (uIndex >= 0) {
+              updatedPayload.fields[uIndex].value = username;
+            }
+          }
+
+          if (website) {
+            const wIndex = updatedPayload.fields.findIndex(
+              (f) => f.type === 'url' || f.label?.toLowerCase().includes('url') || f.label?.toLowerCase().includes('website')
+            );
+            if (wIndex >= 0) {
+              updatedPayload.fields[wIndex].value = website;
+            }
+          }
+
+          const { encryptedData, iv } = encryptVaultBlobSync(updatedPayload, key);
+
+          if (type) item.type = type;
+          if (isFavorite !== undefined) item.isFavorite = Boolean(isFavorite);
+          item.encryptedData = encryptedData;
+          item.iv = iv;
+          item.updatedAt = Date.now();
+          await item.save();
+
+          return jsonResult({
+            success: true,
+            message: `Vault item '${updatedPayload.title}' was successfully updated.`,
+            id: item._id,
+            title: updatedPayload.title,
+            type: item.type,
+            isFavorite: item.isFavorite,
+            updatedAt: item.updatedAt,
+          });
+        }
+
+        case 'delete_vault_item': {
+          const { id } = args || {};
+          if (!id) throw new Error('Vault item ID is required.');
+
+          const item = await VaultItem.findOneAndDelete({ _id: id, user: ctx.userId });
+          if (!item) {
+            return jsonResult({ success: false, error: 'Vault item not found.' }, true);
+          }
+
+          return jsonResult({
+            success: true,
+            message: 'Vault item deleted successfully.',
+            id,
+          });
+        }
+
+        case 'generate_password': {
+          const {
+            length = 20,
+            includeUppercase = true,
+            includeLowercase = true,
+            includeNumbers = true,
+            includeSymbols = true,
+            avoidAmbiguous = false,
+          } = args || {};
+
+          const passLength = Math.max(8, Math.min(128, Number(length) || 20));
+          let uppercase = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+          let lowercase = 'abcdefghijkmnopqrstuvwxyz';
+          let numbers = '23456789';
+          let symbols = '!@#$%^&*()_+-=[]{}|;:,.<>?';
+
+          if (!avoidAmbiguous) {
+            uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+            lowercase = 'abcdefghijklmnopqrstuvwxyz';
+            numbers = '0123456789';
+          }
+
+          let charPool = '';
+          const guaranteedChars = [];
+
+          if (includeUppercase) {
+            charPool += uppercase;
+            guaranteedChars.push(uppercase[crypto.randomInt(uppercase.length)]);
+          }
+          if (includeLowercase) {
+            charPool += lowercase;
+            guaranteedChars.push(lowercase[crypto.randomInt(lowercase.length)]);
+          }
+          if (includeNumbers) {
+            charPool += numbers;
+            guaranteedChars.push(numbers[crypto.randomInt(numbers.length)]);
+          }
+          if (includeSymbols) {
+            charPool += symbols;
+            guaranteedChars.push(symbols[crypto.randomInt(symbols.length)]);
+          }
+
+          if (!charPool) {
+            charPool = lowercase + numbers;
+          }
+
+          const remainingLength = passLength - guaranteedChars.length;
+          const passwordArray = [...guaranteedChars];
+
+          for (let i = 0; i < remainingLength; i++) {
+            const randIndex = crypto.randomInt(charPool.length);
+            passwordArray.push(charPool[randIndex]);
+          }
+
+          // Cryptographic shuffle (Fisher-Yates)
+          for (let i = passwordArray.length - 1; i > 0; i--) {
+            const j = crypto.randomInt(i + 1);
+            [passwordArray[i], passwordArray[j]] = [passwordArray[j], passwordArray[i]];
+          }
+
+          const generated = passwordArray.join('');
+          return jsonResult({
+            success: true,
+            password: generated,
+            length: generated.length,
+            entropyBits: Math.round(generated.length * Math.log2(charPool.length)),
           });
         }
 
