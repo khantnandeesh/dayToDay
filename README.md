@@ -248,3 +248,17 @@ MIT
 
 
 
+
+
+## MCP Custom Connected Apps
+
+The backend exposes a StreamableHTTP MCP endpoint at /mcp and supports OAuth 2.0 Dynamic Client Registration at /oauth/register. Registered OAuth clients are stored in MongoDB.
+
+Set these backend environment variables in production:
+
+    MCP_PUBLIC_URL=https://your-backend-domain.example
+    MCP_ALLOWED_REDIRECT_URIS=https://your-registered-client.example/callback
+
+MCP_PUBLIC_URL must be the public HTTPS origin without a trailing slash. Gemini should be given the full MCP URL, for example https://your-backend-domain.example/mcp. Gemini can discover OAuth automatically from /.well-known/oauth-authorization-server; if automatic registration is unavailable, enter the OAuth authorization and token URLs manually.
+
+The MCP tools are user-scoped. Gemini completes the DayToDay login at /oauth/authorize, exchanges the authorization code at /oauth/token, and calls /mcp with the resulting Bearer token.
