@@ -1,7 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { S3Client, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import jwt from 'jsonwebtoken';
@@ -52,6 +52,44 @@ const getUserStorageUsage = async (userId) => {
   const files = await DriveFile.find({ user: userId, isTrash: false });
   return files.reduce((acc, file) => acc + (file.size || 0), 0);
 };
+
+function getMimeTypeFromFileName(fileName = '') {
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  const mapDigits = {
+    pdf: 'application/pdf',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    webp: 'image/webp',
+    gif: 'image/gif',
+    svg: 'image/svg+xml',
+    txt: 'text/plain',
+    md: 'text/markdown',
+    json: 'application/json',
+    csv: 'text/csv',
+    html: 'text/html',
+    htm: 'text/html',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    zip: 'application/zip',
+    mp3: 'audio/mpeg',
+    mp4: 'video/mp4',
+  };
+  return mapDigits[ext] || 'application/octet-stream';
+}
+
+function formatBytes(bytes, decimals = 2) {
+  if (!+bytes) return '0 Bytes';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+}
 
 // ---------------------------------------------------------------------------
 // Zero-Knowledge PBKDF2 & AES-256-GCM Crypto Helpers (Compatible with WebCrypto)
@@ -959,6 +997,41 @@ function buildServer(ctx) {
         required: ['fileId'],
       },
     },
+    {
+      name: 'upload_file',
+      description:
+        "Upload any file (PDF, document, image, report, text, code, etc.) directly into the user's DayToDay Drive. When the user attaches or uploads a PDF or file in ChatGPT, Gemini, or Claude, call this tool with the file's base64 content or text to store it in DayToDay Drive.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: "The name of the file with extension, e.g. 'Report.pdf', 'Invoice_2026.pdf', 'Notes.txt', 'contract.pdf'.",
+          },
+          contentBase64: {
+            type: 'string',
+            description: 'Base64-encoded binary content of the file (required for PDFs, binary files, images, documents).',
+          },
+          textContent: {
+            type: 'string',
+            description: 'Raw text content (for markdown, text, code, CSV, HTML, JSON files).',
+          },
+          sourceUrl: {
+            type: 'string',
+            description: 'Optional public download URL to fetch and save directly to DayToDay Drive.',
+          },
+          mimeType: {
+            type: 'string',
+            description: "Optional MIME type (e.g. 'application/pdf', 'image/png', 'text/plain'). Auto-detected from file extension if omitted.",
+          },
+          folderId: {
+            type: 'string',
+            description: "Optional folder ID or folder name in DayToDay Drive (or 'root'). If a folder name is provided and doesn't exist, it will be automatically created.",
+          },
+        },
+        required: ['name'],
+      },
+    },
 
     // 3. Vault & Password Management Tools
     {
@@ -1608,6 +1681,187 @@ function buildServer(ctx) {
             mimeType: file.mimeType,
             downloadUrl: url,
             expiresInSeconds: 3600,
+          });
+        }
+
+        case 'upload_file':
+        case 'upload_drive_file': {
+          const {
+            name,
+            fileName,
+            filename,
+            contentBase64,
+            file_base64,
+            base64,
+            content,
+            textContent,
+            text,
+            sourceUrl,
+            url,
+            mimeType,
+            contentType,
+            folderId,
+            folder_id,
+            folder,
+          } = args || {};
+
+          const rawName = name || fileName || filename || 'uploaded_document';
+          const targetFolderParam = folderId || folder_id || folder;
+          const userMime = mimeType || contentType;
+
+          // 1. Resolve file buffer and MIME type
+          let buffer = null;
+          let detectedMimeType = userMime || getMimeTypeFromFileName(rawName);
+
+          let inputBase64 = contentBase64 || file_base64 || base64;
+          if (!inputBase64 && typeof content === 'string') {
+            // Check if content is base64 or text
+            if (content.startsWith('data:') || /^[A-Za-z0-9+/=\s\r\n]{50,}$/.test(content.trim())) {
+              inputBase64 = content;
+            }
+          }
+
+          if (inputBase64) {
+            let cleanB64 = String(inputBase64).trim();
+            if (cleanB64.startsWith('data:')) {
+              const matches = cleanB64.match(/^data:([^;]+);base64,(.+)$/s);
+              if (matches) {
+                if (!userMime) detectedMimeType = matches[1];
+                cleanB64 = matches[2];
+              } else {
+                cleanB64 = cleanB64.replace(/^data:[^;]+;base64,/, '');
+              }
+            }
+            cleanB64 = cleanB64.replace(/\s+/g, '');
+            buffer = Buffer.from(cleanB64, 'base64');
+          } else if (textContent !== undefined || text !== undefined) {
+            const rawText = textContent !== undefined ? textContent : text;
+            buffer = Buffer.from(String(rawText), 'utf8');
+            if (!userMime && !rawName.includes('.')) {
+              detectedMimeType = 'text/plain';
+            }
+          } else if (sourceUrl || url) {
+            const fetchUrl = sourceUrl || url;
+            const res = await fetch(fetchUrl);
+            if (!res.ok) {
+              throw new Error(`Failed to fetch file from URL (${res.status} ${res.statusText})`);
+            }
+            if (!userMime && res.headers.get('content-type')) {
+              detectedMimeType = res.headers.get('content-type').split(';')[0];
+            }
+            const arrayBuf = await res.arrayBuffer();
+            buffer = Buffer.from(arrayBuf);
+          } else if (typeof content === 'string') {
+            buffer = Buffer.from(content, 'utf8');
+          }
+
+          if (!buffer || buffer.length === 0) {
+            return jsonResult(
+              {
+                success: false,
+                error:
+                  'No file content provided. Please pass contentBase64 (for binary files/PDFs), textContent (for text/markdown), or sourceUrl.',
+              },
+              true
+            );
+          }
+
+          // 2. Check storage quota
+          const usedBytes = await getUserStorageUsage(ctx.userId);
+          if (usedBytes + buffer.length > QUOTA_LIMIT) {
+            return jsonResult(
+              {
+                success: false,
+                error: `Storage quota exceeded. Currently using ${formatBytes(usedBytes)} / 5 GB limit.`,
+              },
+              true
+            );
+          }
+
+          // 3. Resolve parent folder
+          let resolvedFolderId = null;
+          let resolvedFolderName = 'Root';
+          if (targetFolderParam && targetFolderParam !== 'root') {
+            if (targetFolderParam.match(/^[0-9a-fA-F]{24}$/)) {
+              const folderDoc = await DriveFolder.findOne({ _id: targetFolderParam, user: ctx.userId });
+              if (folderDoc) {
+                resolvedFolderId = folderDoc._id;
+                resolvedFolderName = folderDoc.name;
+              }
+            } else {
+              // Search folder by name or create it
+              let folderDoc = await DriveFolder.findOne({
+                name: targetFolderParam,
+                user: ctx.userId,
+                isTrash: false,
+              });
+              if (!folderDoc) {
+                folderDoc = await DriveFolder.create({
+                  user: ctx.userId,
+                  name: targetFolderParam,
+                });
+              }
+              resolvedFolderId = folderDoc._id;
+              resolvedFolderName = folderDoc.name;
+            }
+          }
+
+          // 4. Generate unique cloud storage R2/S3 key
+          const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const randomHex = crypto.randomBytes(8).toString('hex');
+          const r2Key = `users/${ctx.userId}/${randomHex}-${safeName}`;
+
+          const r2 = getR2Client();
+          if (!r2) {
+            throw new Error('Cloud storage (Cloudflare R2 / S3) is not configured on this server.');
+          }
+
+          await r2.send(
+            new PutObjectCommand({
+              Bucket: BUCKET_NAME,
+              Key: r2Key,
+              Body: buffer,
+              ContentType: detectedMimeType,
+            })
+          );
+
+          // 5. Save metadata into MongoDB
+          const driveFile = await DriveFile.create({
+            user: ctx.userId,
+            folder: resolvedFolderId,
+            name: rawName,
+            size: buffer.length,
+            mimeType: detectedMimeType,
+            r2Key,
+          });
+
+          // 6. Generate presigned download preview URL (valid 24 hours)
+          let previewUrl = '';
+          try {
+            const getCmd = new GetObjectCommand({
+              Bucket: BUCKET_NAME,
+              Key: r2Key,
+              ResponseContentDisposition: `inline; filename="${driveFile.name}"`,
+            });
+            previewUrl = await getSignedUrl(r2, getCmd, { expiresIn: 86400 });
+          } catch (err) {
+            console.error('Presigned preview URL generation error:', err);
+          }
+
+          return jsonResult({
+            success: true,
+            message: `Successfully uploaded '${driveFile.name}' (${formatBytes(driveFile.size)}) into DayToDay Drive (${resolvedFolderName}).`,
+            file: {
+              id: driveFile._id,
+              name: driveFile.name,
+              size: driveFile.size,
+              sizeFormatted: formatBytes(driveFile.size),
+              mimeType: driveFile.mimeType,
+              folder: resolvedFolderName,
+              folderId: resolvedFolderId || 'root',
+              previewUrl,
+              createdAt: driveFile.createdAt,
+            },
           });
         }
 
