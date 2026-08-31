@@ -168,7 +168,7 @@ export function oauthMetadata(req, res) {
     authorization_endpoint: base + '/oauth/authorize',
     token_endpoint: base + '/oauth/token',
     registration_endpoint: base + '/oauth/register',
-    grant_types_supported: ['authorization_code', 'client_credentials'],
+    grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
     token_endpoint_auth_methods_supported: [
       'client_secret_basic',
       'client_secret_post',
@@ -576,27 +576,8 @@ function finishAuthorize(res, userId, { clientId, redirectUri, state, codeChalle
     if (state) url.searchParams.set('state', state);
     const targetUrl = url.toString();
 
-    res.status(303);
-    res.setHeader('Location', targetUrl);
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Authorizing...</title>
-  <meta http-equiv="refresh" content="0;url=${targetUrl.replace(/"/g, '&quot;')}">
-  <script>window.location.replace(${JSON.stringify(targetUrl)});</script>
-</head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#f8fafc;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:16px;">
-  <div style="background:#1e293b;padding:32px 28px;border-radius:14px;border:1px solid #334155;max-width:380px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.5);">
-    <div style="font-size:32px;margin-bottom:12px;">✅</div>
-    <h1 style="font-size:18px;margin:0 0 8px;font-weight:700;color:#ffffff;">Authorization Successful</h1>
-    <p style="color:#94a3b8;font-size:13.5px;margin:0 0 20px;line-height:1.5;">Redirecting back to your AI client...</p>
-    <a href="${targetUrl.replace(/"/g, '&quot;')}" style="display:inline-block;padding:10px 16px;background:#38bdf8;color:#0f172a;text-decoration:none;border-radius:8px;font-size:13px;font-weight:700;">Click if not redirected automatically &rarr;</a>
-  </div>
-</body>
-</html>`);
+    // Standard RFC 6749 302 redirect + Location header
+    return res.redirect(302, targetUrl);
   } catch {
     return res.status(400).json({ error: 'invalid_redirect_uri' });
   }
@@ -645,10 +626,41 @@ export async function oauthToken(req, res) {
       process.env.JWT_SECRET,
       { expiresIn: '720h' }
     );
+    const refreshToken = jwt.sign(
+      { id: cd.sub, azp: client.clientId, typ: 'rt' },
+      process.env.JWT_SECRET,
+      { expiresIn: '365d' }
+    );
     return res.json({
       access_token: accessToken,
       token_type: 'Bearer',
       expires_in: 720 * 3600,
+      refresh_token: refreshToken,
+      scope: 'mcp',
+    });
+  }
+
+  if (grantType === 'refresh_token') {
+    const refreshToken = req.body?.refresh_token;
+    let rt;
+    try {
+      rt = jwt.verify(refreshToken, process.env.JWT_SECRET);
+    } catch {
+      return res.status(400).json({ error: 'invalid_grant' });
+    }
+    if (rt.typ !== 'rt' || rt.azp !== client.clientId) {
+      return res.status(400).json({ error: 'invalid_grant' });
+    }
+    const newAccessToken = jwt.sign(
+      { id: rt.id, mcp: true },
+      process.env.JWT_SECRET,
+      { expiresIn: '720h' }
+    );
+    return res.json({
+      access_token: newAccessToken,
+      token_type: 'Bearer',
+      expires_in: 720 * 3600,
+      refresh_token: refreshToken,
       scope: 'mcp',
     });
   }

@@ -31,7 +31,13 @@ const app = express();
 // ---------------------------------------------------------------------------
 // Security & Body Parsers
 // ---------------------------------------------------------------------------
-app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+    contentSecurityPolicy: false,
+    crossOriginOpenerPolicy: false,
+  })
+);
 app.use(mongoSanitize());
 app.use(xss());
 app.use(express.json({ limit: '10mb' }));
