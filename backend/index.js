@@ -8,7 +8,7 @@ import vaultRoutes from './routes/vaultRoutes.js';
 import driveRoutes from './routes/driveRoutes.js';
 import AllowedOrigin from './models/AllowedOrigin.js'; // Added for dynamic CORS
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { authenticateMcpRequest, buildServer, mcpTransports, oauthMetadata, oauthToken, oauthAuthorize, resolveUserId } from './mcp/server.js'; // MCP Server (SSE) + OAuth
+import { authenticateMcpRequest, buildServer, mcpTransports, oauthMetadata, oauthRegister, oauthToken, oauthAuthorize, resolveUserId } from './mcp/server.js'; // MCP Server (SSE) + OAuth
 import { handleStreamableMcp } from './mcp/streamable.js';
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
@@ -50,7 +50,6 @@ app.get('/cors-admin', async (req, res) => {
         <html>
         <head>
             <title>CORS Manager - DayToDay</title>
-            <script src="https://cdn.tailwindcss.com"></script>
         </head>
         <body class="bg-slate-100 min-h-screen p-8 font-sans">
             <div class="max-w-2xl mx-auto bg-white rounded-xl shadow-lg overflow-hidden">
@@ -236,10 +235,10 @@ app.post('/mcp/messages', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// MCP OAuth 2.0 (client_credentials) — lets Gemini's "custom connected app"
-// exchange Client ID + Secret for a user-scoped access token.
+// MCP OAuth 2.0 — supports Dynamic Client Registration and user-scoped tokens.
 // ---------------------------------------------------------------------------
 app.get('/.well-known/oauth-authorization-server', oauthMetadata);
+app.post('/oauth/register', oauthRegister);
 app.post('/oauth/token', oauthToken);
 app.get('/oauth/authorize', oauthAuthorize);
 app.post('/oauth/authorize', oauthAuthorize);
