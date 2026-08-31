@@ -92,6 +92,20 @@ function formatBytes(bytes, decimals = 2) {
 }
 
 // ---------------------------------------------------------------------------
+// In-Memory Upload Chunk Manager for Large AI Attachment Handoffs
+// ---------------------------------------------------------------------------
+const chunkUploadSessions = new Map();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, session] of chunkUploadSessions.entries()) {
+    if (now - session.lastActive > 30 * 60 * 1000) {
+      chunkUploadSessions.delete(id);
+    }
+  }
+}, 10 * 60 * 1000);
+
+// ---------------------------------------------------------------------------
 // Zero-Knowledge PBKDF2 & AES-256-GCM Crypto Helpers (Compatible with WebCrypto)
 // ---------------------------------------------------------------------------
 const PBKDF2_ITERATIONS = 600000;
@@ -998,6 +1012,90 @@ function buildServer(ctx) {
       },
     },
     {
+      name: 'request_upload_url',
+      description:
+        "Request a direct Cloudflare R2 presigned PUT upload URL and an MCP HTTP direct upload endpoint. Use this tool when uploading a large file or ChatGPT attachment (such as a PDF, document, or image) to upload it directly via Python, curl, or HTTP without hitting JSON-RPC parameter limits.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: "The name of the file with extension, e.g. 'oraclecetificate.pdf', 'report.pdf'.",
+          },
+          mimeType: {
+            type: 'string',
+            description: "Optional MIME type (e.g. 'application/pdf').",
+          },
+          size: {
+            type: 'number',
+            description: 'Optional estimated size of the file in bytes.',
+          },
+          folderId: {
+            type: 'string',
+            description: "Optional folder ID or folder name (e.g. 'Certificates', 'Work').",
+          },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'upload_file_chunk',
+      description:
+        'Upload large files or attachments in small base64 chunks (e.g. 50KB-100KB per chunk). Perfect for environments like ChatGPT where single-argument payload sizes are restricted.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          uploadId: {
+            type: 'string',
+            description: "A unique session ID for this upload (e.g. 'upload-oracle-pdf-1').",
+          },
+          name: {
+            type: 'string',
+            description: "The filename with extension, e.g. 'oraclecetificate.pdf'.",
+          },
+          chunkIndex: {
+            type: 'number',
+            description: '0-based index of this chunk (0, 1, 2...).',
+          },
+          totalChunks: {
+            type: 'number',
+            description: 'Total number of chunks in this upload.',
+          },
+          chunkBase64: {
+            type: 'string',
+            description: 'Base64-encoded binary content for this specific chunk.',
+          },
+          mimeType: {
+            type: 'string',
+            description: "Optional MIME type, e.g. 'application/pdf'.",
+          },
+          folderId: {
+            type: 'string',
+            description: 'Optional destination folder ID or folder name.',
+          },
+        },
+        required: ['uploadId', 'name', 'chunkIndex', 'totalChunks', 'chunkBase64'],
+      },
+    },
+    {
+      name: 'finalize_file_upload',
+      description: 'Confirm and finalize a file uploaded via presigned uploadUrl.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          fileId: {
+            type: 'string',
+            description: 'The file ID returned from request_upload_url.',
+          },
+          size: {
+            type: 'number',
+            description: 'Final size in bytes if known.',
+          },
+        },
+        required: ['fileId'],
+      },
+    },
+    {
       name: 'upload_file',
       description:
         "Upload any file (PDF, document, image, report, text, code, etc.) directly into the user's DayToDay Drive. When the user attaches or uploads a PDF or file in ChatGPT, Gemini, or Claude, call this tool with the file's base64 content or text to store it in DayToDay Drive.",
@@ -1681,6 +1779,283 @@ function buildServer(ctx) {
             mimeType: file.mimeType,
             downloadUrl: url,
             expiresInSeconds: 3600,
+          });
+        }
+
+        case 'request_upload_url':
+        case 'get_upload_url': {
+          const { name, fileName, filename, mimeType, contentType, size = 0, folderId, folder_id, folder } = args || {};
+          const rawName = name || fileName || filename;
+          if (!rawName) throw new Error('File name is required (e.g. oraclecetificate.pdf)');
+
+          const targetFolderParam = folderId || folder_id || folder;
+          const detectedMimeType = mimeType || contentType || getMimeTypeFromFileName(rawName);
+
+          const usedBytes = await getUserStorageUsage(ctx.userId);
+          if (usedBytes + (Number(size) || 0) > QUOTA_LIMIT) {
+            return jsonResult(
+              {
+                success: false,
+                error: `Storage quota exceeded. Currently using ${formatBytes(usedBytes)} / 5 GB limit.`,
+              },
+              true
+            );
+          }
+
+          // Resolve destination folder
+          let resolvedFolderId = null;
+          let resolvedFolderName = 'Root';
+          if (targetFolderParam && targetFolderParam !== 'root') {
+            if (targetFolderParam.match(/^[0-9a-fA-F]{24}$/)) {
+              const folderDoc = await DriveFolder.findOne({ _id: targetFolderParam, user: ctx.userId });
+              if (folderDoc) {
+                resolvedFolderId = folderDoc._id;
+                resolvedFolderName = folderDoc.name;
+              }
+            } else {
+              let folderDoc = await DriveFolder.findOne({
+                name: targetFolderParam,
+                user: ctx.userId,
+                isTrash: false,
+              });
+              if (!folderDoc) {
+                folderDoc = await DriveFolder.create({ user: ctx.userId, name: targetFolderParam });
+              }
+              resolvedFolderId = folderDoc._id;
+              resolvedFolderName = folderDoc.name;
+            }
+          }
+
+          const randomHex = crypto.randomBytes(8).toString('hex');
+          const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const r2Key = `users/${ctx.userId}/${randomHex}-${safeName}`;
+
+          const r2 = getR2Client();
+          if (!r2) {
+            throw new Error('Cloud storage (Cloudflare R2) is not configured.');
+          }
+
+          const putCmd = new PutObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: r2Key,
+            ContentType: detectedMimeType,
+          });
+          const presignedUploadUrl = await getSignedUrl(r2, putCmd, { expiresIn: 7200 });
+
+          // Pre-create or stage the file record in MongoDB so it is ready immediately once uploaded
+          const driveFile = await DriveFile.create({
+            user: ctx.userId,
+            folder: resolvedFolderId,
+            name: rawName,
+            size: Number(size) || 0,
+            mimeType: detectedMimeType,
+            r2Key,
+          });
+
+          // Generate single-use or scoped token for direct HTTP server upload fallback
+          const directToken = jwt.sign(
+            { id: ctx.userId, mcp: true, purpose: 'direct_upload', fileId: driveFile._id },
+            process.env.JWT_SECRET,
+            { expiresIn: '2h' }
+          );
+
+          const baseUrl =
+            process.env.BACKEND_URL ||
+            process.env.BASE_URL ||
+            'https://ais-dev-2k24isclta7xezqnjjjd3k-539212626537.asia-southeast1.run.app';
+          const httpUploadUrl = `${baseUrl}/mcp/upload?token=${directToken}&fileId=${driveFile._id}&name=${encodeURIComponent(
+            rawName
+          )}`;
+
+          return jsonResult({
+            success: true,
+            message: `Upload URL successfully generated for '${rawName}'. You can upload the attachment binary directly to uploadUrl.`,
+            uploadUrl: presignedUploadUrl,
+            httpUploadUrl,
+            fileId: driveFile._id,
+            folder: resolvedFolderName,
+            mimeType: detectedMimeType,
+            pythonSnippet: `import requests\nwith open('${rawName}', 'rb') as f:\n    r = requests.put('${presignedUploadUrl}', data=f, headers={'Content-Type': '${detectedMimeType}'})\nprint('Upload status:', r.status_code)`,
+            curlCommand: `curl -X PUT -T "${rawName}" -H "Content-Type: ${detectedMimeType}" "${presignedUploadUrl}"`,
+            instructions: `1. In Python: requests.put(uploadUrl, data=open(file_path, 'rb'), headers={'Content-Type': '${detectedMimeType}'})\n2. Or send via upload_file_chunk\n3. The file is already registered in DayToDay Drive!`,
+          });
+        }
+
+        case 'upload_file_chunk': {
+          const { uploadId, name, chunkIndex, totalChunks, chunkBase64, mimeType, folderId } = args || {};
+          if (!uploadId) throw new Error('uploadId is required');
+          if (!name) throw new Error('name is required');
+          if (chunkIndex === undefined || totalChunks === undefined)
+            throw new Error('chunkIndex and totalChunks are required');
+          if (!chunkBase64) throw new Error('chunkBase64 is required');
+
+          let session = chunkUploadSessions.get(uploadId);
+          if (!session) {
+            session = {
+              userId: ctx.userId,
+              name,
+              mimeType: mimeType || getMimeTypeFromFileName(name),
+              folderId,
+              totalChunks: Number(totalChunks),
+              chunks: new Array(Number(totalChunks)),
+              receivedCount: 0,
+              lastActive: Date.now(),
+            };
+            chunkUploadSessions.set(uploadId, session);
+          }
+
+          session.lastActive = Date.now();
+          const idx = Number(chunkIndex);
+          if (!session.chunks[idx]) {
+            let clean = String(chunkBase64).trim().replace(/^data:[^;]+;base64,/, '').replace(/\s+/g, '');
+            session.chunks[idx] = Buffer.from(clean, 'base64');
+            session.receivedCount++;
+          }
+
+          if (session.receivedCount < session.totalChunks) {
+            return jsonResult({
+              success: true,
+              uploadId,
+              chunkIndex: idx,
+              totalChunks: session.totalChunks,
+              receivedChunks: session.receivedCount,
+              progress: `${Math.round((session.receivedCount / session.totalChunks) * 100)}%`,
+              message: `Chunk ${idx + 1}/${session.totalChunks} received. Send remaining chunks to complete upload.`,
+            });
+          }
+
+          // All chunks received! Stitch and upload
+          const fullBuffer = Buffer.concat(session.chunks);
+          chunkUploadSessions.delete(uploadId);
+
+          const usedBytes = await getUserStorageUsage(ctx.userId);
+          if (usedBytes + fullBuffer.length > QUOTA_LIMIT) {
+            return jsonResult(
+              {
+                success: false,
+                error: `Storage quota exceeded. Currently using ${formatBytes(usedBytes)} / 5 GB limit.`,
+              },
+              true
+            );
+          }
+
+          // Resolve folder
+          let resolvedFolderId = null;
+          let resolvedFolderName = 'Root';
+          if (session.folderId && session.folderId !== 'root') {
+            if (session.folderId.match(/^[0-9a-fA-F]{24}$/)) {
+              const folderDoc = await DriveFolder.findOne({ _id: session.folderId, user: ctx.userId });
+              if (folderDoc) {
+                resolvedFolderId = folderDoc._id;
+                resolvedFolderName = folderDoc.name;
+              }
+            } else {
+              let folderDoc = await DriveFolder.findOne({
+                name: session.folderId,
+                user: ctx.userId,
+                isTrash: false,
+              });
+              if (!folderDoc) {
+                folderDoc = await DriveFolder.create({ user: ctx.userId, name: session.folderId });
+              }
+              resolvedFolderId = folderDoc._id;
+              resolvedFolderName = folderDoc.name;
+            }
+          }
+
+          const randomHex = crypto.randomBytes(8).toString('hex');
+          const safeName = session.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const r2Key = `users/${ctx.userId}/${randomHex}-${safeName}`;
+
+          const r2 = getR2Client();
+          if (!r2) {
+            throw new Error('Cloud storage (Cloudflare R2) is not configured.');
+          }
+
+          await r2.send(
+            new PutObjectCommand({
+              Bucket: BUCKET_NAME,
+              Key: r2Key,
+              Body: fullBuffer,
+              ContentType: session.mimeType,
+            })
+          );
+
+          const driveFile = await DriveFile.create({
+            user: ctx.userId,
+            folder: resolvedFolderId,
+            name: session.name,
+            size: fullBuffer.length,
+            mimeType: session.mimeType,
+            r2Key,
+          });
+
+          let previewUrl = '';
+          try {
+            const getCmd = new GetObjectCommand({
+              Bucket: BUCKET_NAME,
+              Key: r2Key,
+              ResponseContentDisposition: `inline; filename="${driveFile.name}"`,
+            });
+            previewUrl = await getSignedUrl(r2, getCmd, { expiresIn: 86400 });
+          } catch (err) {}
+
+          return jsonResult({
+            success: true,
+            message: `Successfully assembled all chunks and uploaded '${driveFile.name}' (${formatBytes(
+              driveFile.size
+            )}) into DayToDay Drive (${resolvedFolderName}).`,
+            file: {
+              id: driveFile._id,
+              name: driveFile.name,
+              size: driveFile.size,
+              sizeFormatted: formatBytes(driveFile.size),
+              mimeType: driveFile.mimeType,
+              folder: resolvedFolderName,
+              previewUrl,
+              createdAt: driveFile.createdAt,
+            },
+          });
+        }
+
+        case 'finalize_file_upload': {
+          const { fileId, size } = args || {};
+          if (!fileId) throw new Error('fileId is required');
+
+          const driveFile = await DriveFile.findOne({ _id: fileId, user: ctx.userId });
+          if (!driveFile) {
+            return jsonResult({ success: false, error: 'File record not found.' }, true);
+          }
+
+          if (size && Number(size) > 0) {
+            driveFile.size = Number(size);
+            await driveFile.save();
+          }
+
+          const r2 = getR2Client();
+          let previewUrl = '';
+          if (r2) {
+            try {
+              const getCmd = new GetObjectCommand({
+                Bucket: BUCKET_NAME,
+                Key: driveFile.r2Key,
+                ResponseContentDisposition: `inline; filename="${driveFile.name}"`,
+              });
+              previewUrl = await getSignedUrl(r2, getCmd, { expiresIn: 86400 });
+            } catch {}
+          }
+
+          return jsonResult({
+            success: true,
+            message: `File '${driveFile.name}' finalized successfully.`,
+            file: {
+              id: driveFile._id,
+              name: driveFile.name,
+              size: driveFile.size,
+              sizeFormatted: formatBytes(driveFile.size),
+              mimeType: driveFile.mimeType,
+              previewUrl,
+            },
           });
         }
 
@@ -2412,6 +2787,166 @@ function buildServer(ctx) {
   });
 
   return server;
+}
+
+export async function handleDirectHttpUpload(req, res) {
+  try {
+    let userId = null;
+    try {
+      userId = await resolveUserId(req);
+    } catch {
+      return res
+        .status(401)
+        .json({ success: false, message: 'Unauthorized: invalid or missing token' });
+    }
+
+    const {
+      name,
+      fileName,
+      filename,
+      fileId,
+      folderId,
+      folder_id,
+      folder,
+      mimeType,
+      contentType,
+    } = req.query;
+    const rawName = name || fileName || filename || 'uploaded_document';
+    const detectedMimeType =
+      mimeType ||
+      contentType ||
+      req.headers['content-type'] ||
+      getMimeTypeFromFileName(rawName);
+
+    let buffer = null;
+    if (Buffer.isBuffer(req.body)) {
+      buffer = req.body;
+    } else if (typeof req.body === 'string') {
+      buffer = Buffer.from(req.body);
+    } else if (req.body && typeof req.body === 'object' && req.body.contentBase64) {
+      buffer = Buffer.from(
+        req.body.contentBase64
+          .replace(/^data:[^;]+;base64,/, '')
+          .replace(/\s+/g, ''),
+        'base64'
+      );
+    }
+
+    if (!buffer || buffer.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file binary data received in request body.',
+      });
+    }
+
+    const usedBytes = await getUserStorageUsage(userId);
+    if (usedBytes + buffer.length > QUOTA_LIMIT) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Storage quota exceeded (5 GB limit).' });
+    }
+
+    const r2 = getR2Client();
+    if (!r2) {
+      return res
+        .status(500)
+        .json({ success: false, message: 'Cloud storage is not configured.' });
+    }
+
+    let driveFile = null;
+    if (fileId && fileId.match(/^[0-9a-fA-F]{24}$/)) {
+      driveFile = await DriveFile.findOne({ _id: fileId, user: userId });
+    }
+
+    let r2Key;
+    if (driveFile) {
+      r2Key = driveFile.r2Key;
+      driveFile.size = buffer.length;
+      driveFile.mimeType = detectedMimeType;
+      await driveFile.save();
+    } else {
+      const targetFolderParam = folderId || folder_id || folder;
+      let resolvedFolderId = null;
+      let resolvedFolderName = 'Root';
+      if (targetFolderParam && targetFolderParam !== 'root') {
+        if (targetFolderParam.match(/^[0-9a-fA-F]{24}$/)) {
+          const folderDoc = await DriveFolder.findOne({
+            _id: targetFolderParam,
+            user: userId,
+          });
+          if (folderDoc) {
+            resolvedFolderId = folderDoc._id;
+            resolvedFolderName = folderDoc.name;
+          }
+        } else {
+          let folderDoc = await DriveFolder.findOne({
+            name: targetFolderParam,
+            user: userId,
+            isTrash: false,
+          });
+          if (!folderDoc) {
+            folderDoc = await DriveFolder.create({
+              user: userId,
+              name: targetFolderParam,
+            });
+          }
+          resolvedFolderId = folderDoc._id;
+          resolvedFolderName = folderDoc.name;
+        }
+      }
+
+      const randomHex = crypto.randomBytes(8).toString('hex');
+      const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      r2Key = `users/${userId}/${randomHex}-${safeName}`;
+
+      driveFile = await DriveFile.create({
+        user: userId,
+        folder: resolvedFolderId,
+        name: rawName,
+        size: buffer.length,
+        mimeType: detectedMimeType,
+        r2Key,
+      });
+    }
+
+    await r2.send(
+      new PutObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: r2Key,
+        Body: buffer,
+        ContentType: detectedMimeType,
+      })
+    );
+
+    let previewUrl = '';
+    try {
+      const getCmd = new GetObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: r2Key,
+        ResponseContentDisposition: `inline; filename="${driveFile.name}"`,
+      });
+      previewUrl = await getSignedUrl(r2, getCmd, { expiresIn: 86400 });
+    } catch {}
+
+    return res.status(200).json({
+      success: true,
+      message: `File '${driveFile.name}' (${formatBytes(
+        driveFile.size
+      )}) successfully uploaded to DayToDay Drive.`,
+      file: {
+        id: driveFile._id,
+        name: driveFile.name,
+        size: driveFile.size,
+        sizeFormatted: formatBytes(driveFile.size),
+        mimeType: driveFile.mimeType,
+        previewUrl,
+        createdAt: driveFile.createdAt,
+      },
+    });
+  } catch (err) {
+    console.error('Direct HTTP upload error:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
 }
 
 export { buildServer };

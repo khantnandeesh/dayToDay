@@ -21,6 +21,7 @@ import {
   oauthAuthorize,
   resolveUserId,
   getPublicBaseUrl,
+  handleDirectHttpUpload,
 } from './mcp/server.js';
 import { handleStreamableMcp } from './mcp/streamable.js';
 
@@ -40,8 +41,9 @@ app.use(
 );
 app.use(mongoSanitize());
 app.use(xss());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.raw({ limit: '50mb', type: ['application/octet-stream', 'application/pdf', 'image/*'] }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 
 // ---------------------------------------------------------------------------
@@ -194,6 +196,9 @@ app.post('/mcp/messages', async (req, res) => {
 
   await entry.transport.handlePostMessage(req, res);
 });
+
+// 6. Direct HTTP Binary / File Upload for MCP AI Environments & Python code interpreter
+app.post(['/mcp/upload-file', '/mcp/upload', '/api/mcp/upload'], handleDirectHttpUpload);
 
 // ---------------------------------------------------------------------------
 // CORS Admin Interface (SSR)
