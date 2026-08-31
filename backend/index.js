@@ -9,7 +9,7 @@ import driveRoutes from './routes/driveRoutes.js';
 import AllowedOrigin from './models/AllowedOrigin.js'; // Added for dynamic CORS
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { authenticateMcpRequest, buildServer, mcpTransports, oauthMetadata, oauthToken, oauthAuthorize, resolveUserId } from './mcp/server.js'; // MCP Server (SSE) + OAuth
-
+import { handleStreamableMcp } from './mcp/streamable.js';
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
 import xss from 'xss-clean';
@@ -27,6 +27,17 @@ app.use(xss());
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true }));
 
+
+app.all('/mcp', handleStreamableMcp);
+
+app.get('/.well-known/oauth-protected-resource', (req, res) => {
+  const base = process.env.MCP_PUBLIC_URL || `https://${req.headers.host}`;
+  res.json({
+    resource: `${base}/mcp`,
+    authorization_servers: [base],
+    scopes_supported: ['mcp'],
+  });
+});
 // --- CORS Admin Interface (SSR) ---
 // Placed BEFORE CORS middleware to bypass checks
 app.get('/cors-admin', async (req, res) => {
