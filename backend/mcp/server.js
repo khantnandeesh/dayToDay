@@ -110,12 +110,97 @@ setInterval(() => {
 // ---------------------------------------------------------------------------
 const PBKDF2_ITERATIONS = 600000;
 
-function deriveVaultKeySync(masterPassword, saltHex) {
+export const mcpVaultSessions = new Map(); // userId -> { key: Buffer, expiresAt: number, durationMinutes: number, grantedAt: number }
+export const oneTimeVaultTokens = new Map(); // tokenString -> { key: Buffer, userId: string, expiresAt: number, usesRemaining: number }
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, sess] of mcpVaultSessions.entries()) {
+    if (now > sess.expiresAt) {
+      mcpVaultSessions.delete(userId);
+    }
+  }
+  for (const [token, tok] of oneTimeVaultTokens.entries()) {
+    if (now > tok.expiresAt || tok.usesRemaining <= 0) {
+      oneTimeVaultTokens.delete(token);
+    }
+  }
+}, 30 * 1000);
+
+export function setMcpVaultSession(userId, key, durationMinutes = 15) {
+  const grantedAt = Date.now();
+  const expiresAt = grantedAt + durationMinutes * 60 * 1000;
+  mcpVaultSessions.set(String(userId), {
+    key,
+    grantedAt,
+    expiresAt,
+    durationMinutes,
+  });
+  return { expiresAt, durationMinutes };
+}
+
+export function getMcpVaultSession(userId) {
+  const sess = mcpVaultSessions.get(String(userId));
+  if (!sess) return null;
+  if (Date.now() > sess.expiresAt) {
+    mcpVaultSessions.delete(String(userId));
+    return null;
+  }
+  return sess;
+}
+
+export function revokeMcpVaultSession(userId) {
+  const uid = String(userId);
+  const existed = mcpVaultSessions.delete(uid);
+  for (const [tokKey, tok] of oneTimeVaultTokens.entries()) {
+    if (tok.userId === uid) {
+      oneTimeVaultTokens.delete(tokKey);
+    }
+  }
+  return existed;
+}
+
+export function createMcpOneTimeToken(userId, key, maxUses = 1, ttlMinutes = 10) {
+  const token = `mcp_auth_${crypto.randomBytes(16).toString('hex')}`;
+  const expiresAt = Date.now() + ttlMinutes * 60 * 1000;
+  oneTimeVaultTokens.set(token, {
+    key,
+    userId: String(userId),
+    expiresAt,
+    usesRemaining: maxUses,
+  });
+  return { token, expiresAt, maxUses };
+}
+
+export function resolveKeyForVaultAction(userId, masterPassword, sessionToken) {
+  // 1. Check one-time token or explicit session token
+  if (sessionToken) {
+    const tok = oneTimeVaultTokens.get(sessionToken.trim());
+    if (tok && tok.userId === String(userId) && Date.now() <= tok.expiresAt) {
+      tok.usesRemaining--;
+      if (tok.usesRemaining <= 0) {
+        oneTimeVaultTokens.delete(sessionToken.trim());
+      }
+      return { key: tok.key, source: 'one_time_token' };
+    }
+  }
+
+  // 2. Check active in-memory user MCP session authorized from the UI modal
+  const activeSess = getMcpVaultSession(userId);
+  if (activeSess) {
+    const remainingMins = Math.ceil((activeSess.expiresAt - Date.now()) / (60 * 1000));
+    return { key: activeSess.key, source: 'active_session', remainingMinutes: remainingMins };
+  }
+
+  return null;
+}
+
+export function deriveVaultKeySync(masterPassword, saltHex) {
   const saltBuf = Buffer.from(saltHex, 'hex');
   return crypto.pbkdf2Sync(masterPassword, saltBuf, PBKDF2_ITERATIONS, 32, 'sha256');
 }
 
-function verifyVaultKey(key, verifierB64, verifierIvHex) {
+export function verifyVaultKey(key, verifierB64, verifierIvHex) {
   try {
     const combinedBuf = Buffer.from(verifierB64, 'base64');
     if (combinedBuf.length < 16) return false;
@@ -134,7 +219,7 @@ function verifyVaultKey(key, verifierB64, verifierIvHex) {
   }
 }
 
-function decryptVaultBlobSync(encryptedDataB64, ivHex, key) {
+export function decryptVaultBlobSync(encryptedDataB64, ivHex, key) {
   const combinedBuf = Buffer.from(encryptedDataB64, 'base64');
   if (combinedBuf.length < 16) {
     throw new Error('Corrupted encrypted data payload.');
@@ -150,7 +235,7 @@ function decryptVaultBlobSync(encryptedDataB64, ivHex, key) {
   return JSON.parse(decrypted);
 }
 
-function encryptVaultBlobSync(payloadObj, key) {
+export function encryptVaultBlobSync(payloadObj, key) {
   const jsonStr = JSON.stringify(payloadObj);
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
@@ -1159,14 +1244,19 @@ function buildServer(ctx) {
     {
       name: 'list_passwords',
       description:
-        'List vault password accounts and item headers. If master_password is provided, decrypts and lists account titles, usernames, websites, and field keys (with passwords masked). If master_password is omitted, returns item IDs and metadata.',
+        'List vault password accounts and item headers. Decrypts and lists account titles, usernames, websites, and field keys. Uses active AI Vault Session (authorized securely in DayToDay frontend modal), session_token, or master_password.',
       inputSchema: {
         type: 'object',
         properties: {
+          session_token: {
+            type: 'string',
+            description:
+              'Optional one-time or temporary session token (mcp_auth_...) generated securely in the DayToDay frontend modal. Preferred over typing master_password in chat.',
+          },
           master_password: {
             type: 'string',
             description:
-              'Optional DayToDay Master Password. When provided, allows decrypting and listing usernames/titles. If omitted, returns item IDs and metadata or prompts for master_password.',
+              'Optional DayToDay Master Password. NOTE: To protect privacy, prefer unlocking an AI Session via the DayToDay UI modal instead of sending raw passwords in chat.',
           },
           type: {
             type: 'string',
@@ -1182,7 +1272,7 @@ function buildServer(ctx) {
     {
       name: 'get_password',
       description:
-        'Retrieve and decrypt a specific vault item or credential (including username, password, URLs, notes, and custom fields). Requires the user master_password.',
+        'Retrieve and decrypt a specific vault item or credential (including username, password, URLs, notes, and custom fields). Automatically uses active AI Vault Session (authorized securely in DayToDay frontend modal), session_token, or master_password.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1190,10 +1280,15 @@ function buildServer(ctx) {
             type: 'string',
             description: 'The Vault Item ID or exact item Title to retrieve.',
           },
+          session_token: {
+            type: 'string',
+            description:
+              'Optional one-time session token (mcp_auth_...) generated securely in the DayToDay frontend modal.',
+          },
           master_password: {
             type: 'string',
             description:
-              'The user DayToDay Master Password used to decrypt this vault item. If not known, ask the user.',
+              'Optional Master Password. NOTE: Prefer authorizing an AI Session in the DayToDay web modal.',
           },
         },
         required: ['id'],
@@ -1202,7 +1297,7 @@ function buildServer(ctx) {
     {
       name: 'create_password',
       description:
-        'Encrypt and save a new password or credential into the user DayToDay Vault with zero-knowledge AES-GCM encryption. Requires master_password.',
+        'Encrypt and save a new password or credential into the user DayToDay Vault with zero-knowledge AES-GCM encryption. Automatically uses active AI Vault Session, session_token, or master_password.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1248,19 +1343,22 @@ function buildServer(ctx) {
             type: 'boolean',
             description: 'Set to true to mark this credential as a favorite.',
           },
+          session_token: {
+            type: 'string',
+            description: 'Optional one-time session authorization token generated in the DayToDay UI modal.',
+          },
           master_password: {
             type: 'string',
-            description:
-              'The user DayToDay Master Password used to encrypt the item before saving. If not provided, ask the user.',
+            description: 'Optional Master Password. Prefer unlocking via DayToDay frontend modal.',
           },
         },
-        required: ['title', 'password', 'master_password'],
+        required: ['title', 'password'],
       },
     },
     {
       name: 'update_password',
       description:
-        'Update or modify an existing password or credential item in the vault. Encrypts the updated record using the master_password.',
+        'Update or modify an existing password or credential item in the vault. Encrypts the updated record using the active AI Session, session_token, or master_password.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1310,12 +1408,16 @@ function buildServer(ctx) {
             type: 'boolean',
             description: 'Mark or unmark as favorite.',
           },
+          session_token: {
+            type: 'string',
+            description: 'Optional session authorization token generated from the UI modal.',
+          },
           master_password: {
             type: 'string',
-            description: 'The user DayToDay Master Password required to decrypt and re-encrypt the item.',
+            description: 'Optional Master Password.',
           },
         },
-        required: ['id', 'master_password'],
+        required: ['id'],
       },
     },
     {
@@ -2279,7 +2381,7 @@ function buildServer(ctx) {
         }
 
         case 'list_passwords': {
-          const { master_password, type, query: searchQuery } = args || {};
+          const { session_token, sessionToken, authToken, auth_token, master_password, masterPassword, type, query: searchQuery } = args || {};
           const settings = await VaultSettings.findOne({ user: ctx.userId });
           if (!settings) {
             return jsonResult({
@@ -2292,13 +2394,40 @@ function buildServer(ctx) {
           if (type && type !== 'all') filter.type = type;
           const items = await VaultItem.find(filter).sort({ updatedAt: -1 });
 
-          // If no master password provided, prompt the AI agent to ask the user
-          if (!master_password) {
+          // Resolve crypto key: check active UI session or one-time token or explicit password
+          const resolvedToken = session_token || sessionToken || auth_token || authToken;
+          const rawPassword = master_password || masterPassword;
+          let key = null;
+          let keySource = null;
+
+          const sessionResolved = resolveKeyForVaultAction(ctx.userId, rawPassword, resolvedToken);
+          if (sessionResolved) {
+            key = sessionResolved.key;
+            keySource = sessionResolved.source;
+          } else if (rawPassword) {
+            const derived = deriveVaultKeySync(rawPassword, settings.salt);
+            if (verifyVaultKey(derived, settings.verifier, settings.verifierIv)) {
+              key = derived;
+              keySource = 'master_password';
+            } else {
+              return jsonResult(
+                {
+                  status: 'invalid_master_password',
+                  error: 'The provided Master Password is incorrect.',
+                },
+                true
+              );
+            }
+          }
+
+          // If vault is locked and no valid authorization exists, guide user to the secure modal
+          if (!key) {
             return jsonResult({
-              status: 'requires_master_password',
-              message: 'Master password is required to decrypt and view account names, usernames, and details.',
-              action_required: 'Please prompt the user for their DayToDay Master Password to view these accounts.',
+              status: 'requires_vault_authorization',
+              message: 'Vault is currently locked. To securely decrypt credentials without typing your Master Password into AI chat, open the DayToDay MCP Security Modal in your dashboard to authorize an AI session or generate a one-time session token.',
+              action_required: 'Ask the user: "Your DayToDay Vault is locked. Please authorize an AI session in the DayToDay web modal, or provide a one-time session token."',
               totalEncryptedItems: items.length,
+              security_note: 'Never type your raw Master Password into the AI chat.',
               items: items.map((i) => ({
                 id: i._id,
                 type: i.type,
@@ -2306,19 +2435,6 @@ function buildServer(ctx) {
                 updatedAt: i.updatedAt,
               })),
             });
-          }
-
-          // Verify master password
-          const key = deriveVaultKeySync(master_password, settings.salt);
-          const isValidKey = verifyVaultKey(key, settings.verifier, settings.verifierIv);
-          if (!isValidKey) {
-            return jsonResult(
-              {
-                status: 'invalid_master_password',
-                error: 'The provided Master Password is incorrect. Please ask the user to verify their Master Password.',
-              },
-              true
-            );
           }
 
           const decryptedList = [];
@@ -2374,12 +2490,13 @@ function buildServer(ctx) {
           return jsonResult({
             count: decryptedList.length,
             items: decryptedList,
+            authorizedVia: keySource === 'active_session' ? 'DayToDay Secure AI Session' : keySource,
             hint: 'To reveal full secret credentials or passwords for an item, call get_password with the item id.',
           });
         }
 
         case 'get_password': {
-          const { id, master_password } = args || {};
+          const { id, session_token, sessionToken, auth_token, authToken, master_password, masterPassword } = args || {};
           if (!id) throw new Error('Vault item ID (or title) is required.');
 
           const settings = await VaultSettings.findOne({ user: ctx.userId });
@@ -2390,33 +2507,45 @@ function buildServer(ctx) {
             });
           }
 
-          if (!master_password) {
+          const resolvedToken = session_token || sessionToken || auth_token || authToken;
+          const rawPassword = master_password || masterPassword;
+          let key = null;
+          let keySource = null;
+
+          const sessionResolved = resolveKeyForVaultAction(ctx.userId, rawPassword, resolvedToken);
+          if (sessionResolved) {
+            key = sessionResolved.key;
+            keySource = sessionResolved.source;
+          } else if (rawPassword) {
+            const derived = deriveVaultKeySync(rawPassword, settings.salt);
+            if (verifyVaultKey(derived, settings.verifier, settings.verifierIv)) {
+              key = derived;
+              keySource = 'master_password';
+            } else {
+              return jsonResult(
+                {
+                  status: 'invalid_master_password',
+                  error: 'The provided Master Password is incorrect.',
+                },
+                true
+              );
+            }
+          }
+
+          if (!key) {
             return jsonResult({
-              status: 'requires_master_password',
-              message: `To view and decrypt credential '${id}', please prompt the user for their DayToDay Master Password.`,
-              action_required: 'Ask the user: "Please provide your DayToDay Master Password to unlock and view this credential."',
+              status: 'requires_vault_authorization',
+              message: `To view and decrypt credential '${id}', please authorize an AI session in the DayToDay web modal, or provide a one-time session token.`,
+              action_required: 'Ask the user: "Please authorize an AI session in your DayToDay modal to safely decrypt this credential."',
+              security_note: 'Never type your raw Master Password into the AI chat.',
             });
           }
 
-          const key = deriveVaultKeySync(master_password, settings.salt);
-          const isValidKey = verifyVaultKey(key, settings.verifier, settings.verifierIv);
-          if (!isValidKey) {
-            return jsonResult(
-              {
-                status: 'invalid_master_password',
-                error: 'The provided Master Password is incorrect. Please ask the user to verify their Master Password.',
-              },
-              true
-            );
-          }
-
           let item = null;
-          // Try finding by ObjectId first
           if (id.match(/^[0-9a-fA-F]{24}$/)) {
             item = await VaultItem.findOne({ _id: id, user: ctx.userId });
           }
 
-          // If not found by ID, search through decrypted items by title match
           if (!item) {
             const allItems = await VaultItem.find({ user: ctx.userId });
             for (const candidate of allItems) {
@@ -2439,7 +2568,6 @@ function buildServer(ctx) {
 
           const decryptedData = decryptVaultBlobSync(item.encryptedData, item.iv, key);
 
-          // Extract standard login fields for convenience
           const passField = decryptedData.fields?.find(
             (f) => f.type === 'password' || f.label?.toLowerCase().includes('password') || f.label?.toLowerCase().includes('pin')
           );
@@ -2466,6 +2594,7 @@ function buildServer(ctx) {
             fields: decryptedData.fields || [],
             tags: decryptedData.tags || [],
             isFavorite: item.isFavorite,
+            authorizedVia: keySource === 'active_session' ? 'DayToDay Secure AI Session' : keySource,
             updatedAt: item.updatedAt,
             createdAt: item.createdAt,
           });
@@ -2481,18 +2610,16 @@ function buildServer(ctx) {
             notes,
             fields = [],
             isFavorite = false,
+            session_token,
+            sessionToken,
+            auth_token,
+            authToken,
             master_password,
+            masterPassword,
           } = args || {};
 
           if (!title) throw new Error('title is required');
           if (!password) throw new Error('password is required');
-          if (!master_password) {
-            return jsonResult({
-              status: 'requires_master_password',
-              message: `To encrypt and save '${title}', please prompt the user for their DayToDay Master Password.`,
-              action_required: 'Ask the user for their DayToDay Master Password to encrypt and store this secret securely.',
-            });
-          }
 
           const settings = await VaultSettings.findOne({ user: ctx.userId });
           if (!settings) {
@@ -2502,16 +2629,34 @@ function buildServer(ctx) {
             });
           }
 
-          const key = deriveVaultKeySync(master_password, settings.salt);
-          const isValidKey = verifyVaultKey(key, settings.verifier, settings.verifierIv);
-          if (!isValidKey) {
-            return jsonResult(
-              {
-                status: 'invalid_master_password',
-                error: 'The provided Master Password is incorrect. Please ask the user to verify their Master Password.',
-              },
-              true
-            );
+          const resolvedToken = session_token || sessionToken || auth_token || authToken;
+          const rawPassword = master_password || masterPassword;
+          let key = null;
+
+          const sessionResolved = resolveKeyForVaultAction(ctx.userId, rawPassword, resolvedToken);
+          if (sessionResolved) {
+            key = sessionResolved.key;
+          } else if (rawPassword) {
+            const derived = deriveVaultKeySync(rawPassword, settings.salt);
+            if (verifyVaultKey(derived, settings.verifier, settings.verifierIv)) {
+              key = derived;
+            } else {
+              return jsonResult(
+                {
+                  status: 'invalid_master_password',
+                  error: 'The provided Master Password is incorrect.',
+                },
+                true
+              );
+            }
+          }
+
+          if (!key) {
+            return jsonResult({
+              status: 'requires_vault_authorization',
+              message: `To encrypt and save '${title}', please authorize an AI session in the DayToDay web modal, or provide a one-time session token.`,
+              action_required: 'Ask the user: "Please authorize an AI session in your DayToDay modal to securely store this credential."',
+            });
           }
 
           // Build fields list
@@ -2569,17 +2714,15 @@ function buildServer(ctx) {
             notes,
             fields,
             isFavorite,
+            session_token,
+            sessionToken,
+            auth_token,
+            authToken,
             master_password,
+            masterPassword,
           } = args || {};
 
           if (!id) throw new Error('Vault Item id is required');
-          if (!master_password) {
-            return jsonResult({
-              status: 'requires_master_password',
-              message: `To update vault item '${id}', please prompt the user for their DayToDay Master Password.`,
-              action_required: 'Ask the user: "Please provide your DayToDay Master Password to authenticate this update."',
-            });
-          }
 
           const settings = await VaultSettings.findOne({ user: ctx.userId });
           if (!settings) {
@@ -2589,16 +2732,34 @@ function buildServer(ctx) {
             });
           }
 
-          const key = deriveVaultKeySync(master_password, settings.salt);
-          const isValidKey = verifyVaultKey(key, settings.verifier, settings.verifierIv);
-          if (!isValidKey) {
-            return jsonResult(
-              {
-                status: 'invalid_master_password',
-                error: 'The provided Master Password is incorrect. Please ask the user to verify their Master Password.',
-              },
-              true
-            );
+          const resolvedToken = session_token || sessionToken || auth_token || authToken;
+          const rawPassword = master_password || masterPassword;
+          let key = null;
+
+          const sessionResolved = resolveKeyForVaultAction(ctx.userId, rawPassword, resolvedToken);
+          if (sessionResolved) {
+            key = sessionResolved.key;
+          } else if (rawPassword) {
+            const derived = deriveVaultKeySync(rawPassword, settings.salt);
+            if (verifyVaultKey(derived, settings.verifier, settings.verifierIv)) {
+              key = derived;
+            } else {
+              return jsonResult(
+                {
+                  status: 'invalid_master_password',
+                  error: 'The provided Master Password is incorrect.',
+                },
+                true
+              );
+            }
+          }
+
+          if (!key) {
+            return jsonResult({
+              status: 'requires_vault_authorization',
+              message: `To update vault item '${id}', please authorize an AI session in the DayToDay web modal, or provide a one-time session token.`,
+              action_required: 'Ask the user: "Please authorize an AI session in your DayToDay modal to authenticate this update."',
+            });
           }
 
           const item = await VaultItem.findOne({ _id: id, user: ctx.userId });

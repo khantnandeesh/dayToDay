@@ -20,9 +20,17 @@ export const VaultProvider = ({ children }) => {
     const [loading, setLoading] = useState(true);
     const [masterKey, setMasterKey] = useState(null);
     const [error, setError] = useState('');
+    const [mcpSession, setMcpSession] = useState({
+        isAuthorized: false,
+        expiresAt: null,
+        remainingMinutes: 0,
+        durationMinutes: 15,
+    });
+    const [isMcpAuthModalOpen, setIsMcpAuthModalOpen] = useState(false);
 
     useEffect(() => {
         checkVaultStatus();
+        checkMcpSessionStatus();
     }, []);
 
     const checkVaultStatus = async () => {
@@ -33,6 +41,89 @@ export const VaultProvider = ({ children }) => {
             console.error('Vault status check failed', err);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const checkMcpSessionStatus = async () => {
+        try {
+            const response = await api.get('/vault/mcp/session');
+            if (response.data.success) {
+                setMcpSession({
+                    isAuthorized: response.data.isAuthorized,
+                    expiresAt: response.data.expiresAt,
+                    remainingMinutes: response.data.remainingMinutes || 0,
+                    durationMinutes: response.data.durationMinutes || 15,
+                });
+            }
+        } catch (err) {
+            console.error('Check MCP session status error:', err);
+        }
+    };
+
+    const openMcpAuthModal = () => setIsMcpAuthModalOpen(true);
+    const closeMcpAuthModal = () => setIsMcpAuthModalOpen(false);
+
+    const authorizeMcpSession = async (password, durationMinutes = 15) => {
+        setError('');
+        try {
+            const response = await api.post('/vault/mcp/authorize', {
+                masterPassword: password,
+                durationMinutes,
+            });
+            if (response.data.success) {
+                setMcpSession({
+                    isAuthorized: true,
+                    expiresAt: response.data.expiresAt,
+                    remainingMinutes: response.data.durationMinutes,
+                    durationMinutes: response.data.durationMinutes,
+                });
+                return { success: true, message: response.data.message };
+            }
+            return { success: false, message: response.data.message || 'Authorization failed' };
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Failed to authorize MCP vault session';
+            setError(msg);
+            return { success: false, message: msg };
+        }
+    };
+
+    const generateMcpOneTimeToken = async (password, ttlMinutes = 10, maxUses = 1) => {
+        setError('');
+        try {
+            const response = await api.post('/vault/mcp/token', {
+                masterPassword: password,
+                ttlMinutes,
+                maxUses,
+            });
+            if (response.data.success) {
+                return {
+                    success: true,
+                    token: response.data.token,
+                    expiresAt: response.data.expiresAt,
+                    maxUses: response.data.maxUses,
+                };
+            }
+            return { success: false, message: response.data.message || 'Token generation failed' };
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Failed to generate one-time token';
+            setError(msg);
+            return { success: false, message: msg };
+        }
+    };
+
+    const revokeMcpSession = async () => {
+        try {
+            await api.post('/vault/mcp/revoke');
+            setMcpSession({
+                isAuthorized: false,
+                expiresAt: null,
+                remainingMinutes: 0,
+                durationMinutes: 15,
+            });
+            return true;
+        } catch (err) {
+            console.error('Revoke MCP session error:', err);
+            return false;
         }
     };
 
@@ -247,6 +338,14 @@ export const VaultProvider = ({ children }) => {
         items,
         loading,
         error,
+        mcpSession,
+        isMcpAuthModalOpen,
+        openMcpAuthModal,
+        closeMcpAuthModal,
+        checkMcpSessionStatus,
+        authorizeMcpSession,
+        generateMcpOneTimeToken,
+        revokeMcpSession,
         initializeVault,
         unlockVault,
         lockVault,

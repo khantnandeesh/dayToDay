@@ -2,11 +2,14 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { LogOut, User, Shield, LayoutDashboard, HardDrive, Search, Command } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useVault } from '../context/VaultContext';
 import api from '../config/api';
 import CommandPalette from './CommandPalette';
+import McpVaultAuthModal from './vault/McpVaultAuthModal';
 
 const Navbar = () => {
     const { user, logout } = useAuth();
+    const { isMcpAuthModalOpen, closeMcpAuthModal } = useVault();
     const navigate = useNavigate();
     const location = useLocation();
     const [showPalette, setShowPalette] = useState(false);
@@ -145,6 +148,7 @@ const Navbar = () => {
             </div>
 
             <CommandPalette isOpen={showPalette} onClose={() => setShowPalette(false)} />
+            <McpVaultAuthModal isOpen={isMcpAuthModalOpen} onClose={closeMcpAuthModal} />
         </>
     );
 };

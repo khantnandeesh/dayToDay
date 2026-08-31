@@ -1,11 +1,17 @@
 import { useState, useEffect } from 'react';
-import { Monitor, Shield, Activity, Smartphone, Clock, Globe, Trash2, AlertCircle, Laptop, Tablet, Command, Terminal } from 'lucide-react';
+import {
+    Monitor, Shield, Activity, Smartphone, Clock, Globe,
+    Trash2, AlertCircle, Laptop, Tablet, Command, Terminal, Sparkles, Key, Lock, PowerOff
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useVault } from '../context/VaultContext';
 import api from '../config/api';
 import Navbar from '../components/Navbar';
+import McpVaultAuthModal from '../components/vault/McpVaultAuthModal';
 
 const Profile = () => {
     const { user, updateUser } = useAuth();
+    const { mcpSession, openMcpAuthModal, isMcpAuthModalOpen, closeMcpAuthModal, revokeMcpSession } = useVault();
     const [devices, setDevices] = useState([]);
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState(null);
@@ -181,7 +187,6 @@ const Profile = () => {
                     </div>
 
                     {/* Account Status */}
-                    {/* Account Status */}
                     <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
                         <div className="flex items-center justify-between mb-4">
                             <div className={`p-2 rounded-lg ${securityStatus.iconColor}`}>
@@ -193,6 +198,57 @@ const Profile = () => {
                         </div>
                         <h3 className="font-medium text-slate-700">Account Status</h3>
                         <p className="text-sm text-slate-500 mt-1">{securityStatus.message}</p>
+                    </div>
+                </div>
+
+                {/* AI Assistant MCP Vault Security Banner */}
+                <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-6 text-white shadow-xl border border-indigo-900/40 relative overflow-hidden">
+                    <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+                        <div className="flex items-start gap-4">
+                            <div className="p-3 bg-indigo-600 rounded-xl text-white shadow-lg shrink-0">
+                                <Sparkles className="w-6 h-6" />
+                            </div>
+                            <div>
+                                <div className="flex items-center gap-3">
+                                    <h2 className="text-lg font-bold text-white">AI Assistant Vault Authorization</h2>
+                                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${mcpSession?.isAuthorized ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-slate-700 text-slate-300'}`}>
+                                        {mcpSession?.isAuthorized ? `Active (${mcpSession.remainingMinutes}m remaining)` : 'Locked / Inactive'}
+                                    </span>
+                                </div>
+                                <p className="text-sm text-slate-300 mt-1 max-w-xl">
+                                    Safely authorize ChatGPT and AI MCP tools with temporary memory tokens or session grants. Your master password is never revealed in AI chat messages.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 shrink-0 w-full md:w-auto">
+                            {mcpSession?.isAuthorized ? (
+                                <>
+                                    <button
+                                        onClick={revokeMcpSession}
+                                        className="flex-1 md:flex-none px-4 py-2.5 bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/30 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <PowerOff className="w-4 h-4" />
+                                        Revoke AI Access
+                                    </button>
+                                    <button
+                                        onClick={openMcpAuthModal}
+                                        className="flex-1 md:flex-none px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-colors shadow-lg shadow-indigo-900/30 flex items-center justify-center gap-2"
+                                    >
+                                        <Key className="w-4 h-4" />
+                                        Manage Access / Token
+                                    </button>
+                                </>
+                            ) : (
+                                <button
+                                    onClick={openMcpAuthModal}
+                                    className="w-full md:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-900/40 flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+                                >
+                                    <Lock className="w-4 h-4" />
+                                    Authorize AI MCP Session
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </div>
 
@@ -282,6 +338,11 @@ const Profile = () => {
                     </div>
                 </div>
             </div>
+
+            <McpVaultAuthModal
+                isOpen={isMcpAuthModalOpen}
+                onClose={closeMcpAuthModal}
+            />
         </div>
     );
 };

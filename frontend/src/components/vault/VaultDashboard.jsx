@@ -5,12 +5,13 @@ import {
     Copy, Trash2, Edit2, CreditCard, Globe,
     Wifi, HardDrive, FileText, LayoutGrid, Star,
     MoreVertical, Eye, Monitor, Film, Gamepad,
-    ShoppingCart, Briefcase, Mail, Key, Settings, Shield
+    ShoppingCart, Briefcase, Mail, Key, Settings, Shield, Sparkles
 } from 'lucide-react';
 import { useVault } from '../../context/VaultContext';
 import VaultItemEditor from './VaultItemEditor';
 import VaultItemDetails from './VaultItemDetails';
 import VaultTemplateCreator from './VaultTemplateCreator';
+import McpVaultAuthModal from './McpVaultAuthModal';
 
 const ICON_MAP = {
     monitor: Monitor,
@@ -37,7 +38,19 @@ const DEFAULT_CATEGORIES = [
 ];
 
 const VaultDashboard = () => {
-    const { items, lockVault, createItem, updateItem, deleteItem, loading, customTemplates } = useVault();
+    const {
+        items,
+        lockVault,
+        createItem,
+        updateItem,
+        deleteItem,
+        loading,
+        customTemplates,
+        mcpSession,
+        isMcpAuthModalOpen,
+        openMcpAuthModal,
+        closeMcpAuthModal
+    } = useVault();
     const [search, setSearch] = useState('');
     const [category, setCategory] = useState('all');
 
@@ -142,10 +155,25 @@ const VaultDashboard = () => {
                             New Category
                         </button>
 
-                        <Link to="/security" className="flex items-center gap-2 p-3 bg-emerald-50 rounded-xl text-xs font-medium text-emerald-700 hover:bg-emerald-100 transition-colors border border-emerald-100">
+                        <Link to="/security" className="flex items-center gap-2 p-3 bg-emerald-50 rounded-xl text-xs font-medium text-emerald-700 hover:bg-emerald-100 transition-colors border border-emerald-100 mb-2">
                             <Shield className="w-4 h-4 shrink-0" />
                             <span className="leading-tight">Why your data is safe?</span>
                         </Link>
+
+                        <button
+                            onClick={openMcpAuthModal}
+                            className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-semibold border transition-all ${mcpSession?.isAuthorized
+                                ? 'bg-indigo-50 border-indigo-200 text-indigo-900 shadow-sm'
+                                : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                                }`}
+                            title="Manage AI MCP Vault Session & One-Time Tokens"
+                        >
+                            <div className="flex items-center gap-2">
+                                <Sparkles className={`w-4 h-4 ${mcpSession?.isAuthorized ? 'text-indigo-600' : 'text-slate-500'}`} />
+                                <span>AI Vault Access</span>
+                            </div>
+                            <span className={`w-2.5 h-2.5 rounded-full ${mcpSession?.isAuthorized ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`} />
+                        </button>
                     </div>
                 </div>
 
@@ -169,17 +197,26 @@ const VaultDashboard = () => {
                         <Shield className="w-5 h-5 text-slate-900" />
                         My Vault
                     </span>
-                    <button
-                        onClick={lockVault}
-                        className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Lock Vault"
-                    >
-                        <Lock className="w-5 h-5" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                        <button
+                            onClick={openMcpAuthModal}
+                            className={`p-2 rounded-lg transition-colors ${mcpSession?.isAuthorized ? 'text-indigo-600 bg-indigo-50' : 'text-slate-500 hover:bg-slate-100'}`}
+                            title="AI Vault Authorization"
+                        >
+                            <Sparkles className="w-5 h-5" />
+                        </button>
+                        <button
+                            onClick={lockVault}
+                            className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            title="Lock Vault"
+                        >
+                            <Lock className="w-5 h-5" />
+                        </button>
+                    </div>
                 </div>
 
                 {/* Toolbar */}
-                <div className="p-4 border-b border-slate-200 flex items-center gap-4 bg-white shrink-0">
+                <div className="p-4 border-b border-slate-200 flex items-center justify-between gap-4 bg-white shrink-0">
                     <div className="relative flex-1 max-w-full md:max-w-md">
                         <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
                         <input
@@ -190,6 +227,28 @@ const VaultDashboard = () => {
                             className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-slate-900 outline-none text-sm"
                         />
                     </div>
+
+                    {/* Desktop AI MCP access badge button */}
+                    <button
+                        onClick={openMcpAuthModal}
+                        className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${mcpSession?.isAuthorized
+                            ? 'bg-indigo-50 border-indigo-200 text-indigo-900 hover:bg-indigo-100'
+                            : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                        title="Authorize AI ChatGPT / Claude access securely"
+                    >
+                        <Sparkles className={`w-3.5 h-3.5 ${mcpSession?.isAuthorized ? 'text-indigo-600' : 'text-slate-500'}`} />
+                        <span>AI Assistant Access</span>
+                        {mcpSession?.isAuthorized ? (
+                            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                {mcpSession.remainingMinutes}m
+                            </span>
+                        ) : (
+                            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-slate-200 text-slate-600">
+                                Locked
+                            </span>
+                        )}
+                    </button>
                 </div>
 
                 {/* Mobile Categories Scroll */}
@@ -322,6 +381,11 @@ const VaultDashboard = () => {
             <VaultTemplateCreator
                 isOpen={isTemplateCreatorOpen}
                 onClose={() => setIsTemplateCreatorOpen(false)}
+            />
+
+            <McpVaultAuthModal
+                isOpen={isMcpAuthModalOpen}
+                onClose={closeMcpAuthModal}
             />
         </div>
     );

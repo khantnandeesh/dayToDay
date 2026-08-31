@@ -2,9 +2,10 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
     Search, LayoutDashboard, Shield, HardDrive, User, LogOut,
-    Command, ArrowRight, FileText, Lock, Unlock
+    Command, ArrowRight, FileText, Lock, Unlock, Sparkles, Key
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useVault } from '../context/VaultContext';
 import api from '../config/api';
 
 const CommandPalette = ({ isOpen, onClose }) => {
@@ -12,11 +13,23 @@ const CommandPalette = ({ isOpen, onClose }) => {
     const [selectedIndex, setSelectedIndex] = useState(0);
     const navigate = useNavigate();
     const { logout } = useAuth();
+    const { openMcpAuthModal, mcpSession } = useVault();
     const inputRef = useRef(null);
     const listRef = useRef(null);
 
     // Actions List
     const actions = [
+        {
+            id: 'mcp-auth',
+            label: mcpSession?.isAuthorized ? 'AI Vault Access (Active Session)' : 'Authorize AI MCP Vault Access',
+            desc: 'Securely authenticate ChatGPT & MCP tools without chat passwords',
+            icon: Sparkles,
+            type: 'action',
+            action: () => {
+                openMcpAuthModal();
+            },
+            shortcut: 'A I'
+        },
         {
             id: 'dashboard',
             label: 'Go to Dashboard',
