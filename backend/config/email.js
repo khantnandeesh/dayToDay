@@ -3,20 +3,24 @@ import { Resend } from "resend";
 
 dotenv.config();
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let resendClient = null;
+
+const getResend = () => {
+  if (!resendClient) {
+    const key = process.env.RESEND_API_KEY;
+    if (!key) {
+      console.warn("⚠️ RESEND_API_KEY environment variable is not configured; email sending will be simulated/skipped.");
+      return null;
+    }
+    resendClient = new Resend(key);
+  }
+  return resendClient;
+};
 
 // Compatibility transporter object
 const transporter = {
   verify: (cb) => cb(null, true),
 };
-
-transporter.verify((error, success) => {
-  if (error) {
-    console.error("❌ Email transporter error:", error);
-  } else {
-    console.log("✅ Resend email service is ready to send messages");
-  }
-});
 
 // Helper: wrap HTML in a minimal, sophisticated shell
 const wrapHtml = (innerHtml, title) => `<!doctype html>
@@ -34,27 +38,21 @@ const wrapHtml = (innerHtml, title) => `<!doctype html>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;min-width:320px;background-color:#ffffff;">
       <tr>
         <td align="center" style="padding:60px 20px;">
-          <!-- Main Container -->
           <div style="max-width:480px;width:100%;margin:0 auto;text-align:left;">
-            
-            <!-- Minimal Header with Centered Logo -->
-      <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:40px;">
-  <tr>
-    <td valign="middle">
-      <span style="font-size:18px;font-weight:600;letter-spacing:-0.5px;color:#000000;">
-        DayToDay
-      </span>
-    </td>
-  </tr>
-</table>
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:40px;">
+              <tr>
+                <td valign="middle">
+                  <span style="font-size:18px;font-weight:600;letter-spacing:-0.5px;color:#000000;">
+                    DayToDay
+                  </span>
+                </td>
+              </tr>
+            </table>
 
-
-            <!-- Content -->
             <div style="line-height:1.6;font-size:15px;color:#333333;">
               ${innerHtml}
             </div>
 
-            <!-- Minimal Footer -->
             <div style="margin-top:60px;padding-top:20px;border-top:1px solid #eaeaea;">
               <p style="margin:0;font-size:12px;color:#888888;">
                 DayToDay &bull; Secure Encrypted Vault
@@ -63,7 +61,6 @@ const wrapHtml = (innerHtml, title) => `<!doctype html>
                 You received this email given your account activity.
               </p>
             </div>
-
           </div>
         </td>
       </tr>
@@ -75,14 +72,19 @@ const wrapHtml = (innerHtml, title) => `<!doctype html>
 //  SEND 2FA CODE EMAIL
 // ------------------------------------------------------
 export const send2FACode = async (email, code, userName) => {
+  const resend = getResend();
+  if (!resend) {
+    console.log(`[Email Mock] 2FA verification code for ${email} is: ${code}`);
+    return { success: true };
+  }
+
   const content = `
     <h1 style="margin:0 0 24px 0;font-size:24px;font-weight:600;color:#000000;letter-spacing:-0.5px;">Verification Code</h1>
     
     <p style="margin:0 0 24px 0;">
-      Hello ${userName}, use this code to securely sign in to your account.
+      Hello ${userName || 'there'}, use this code to securely sign in to your account.
     </p>
 
-    <!-- Code Display (Minimal) -->
     <div style="margin:32px 0;">
       <span style="font-family:'SF Mono', 'Menlo', 'Courier New', monospace;font-size:32px;font-weight:600;letter-spacing:4px;color:#000000;">
         ${code}
@@ -114,11 +116,17 @@ export const send2FACode = async (email, code, userName) => {
 //  SEND WELCOME EMAIL
 // ------------------------------------------------------
 export const sendWelcomeEmail = async (email, userName) => {
+  const resend = getResend();
+  if (!resend) {
+    console.log(`[Email Mock] Welcome email for ${email}`);
+    return { success: true };
+  }
+
   const content = `
     <h1 style="margin:0 0 24px 0;font-size:24px;font-weight:600;color:#000000;letter-spacing:-0.5px;">Welcome to DayToDay</h1>
     
     <p style="margin:0 0 24px 0;">
-      Hi ${userName},
+      Hi ${userName || 'there'},
     </p>
     <p style="margin:0 0 24px 0;">
       Your secure vault is ready. We've built DayToDay to be the safest place for your digital life, combining military-grade encryption with a beautiful user experience.
@@ -154,6 +162,12 @@ export const sendWelcomeEmail = async (email, userName) => {
 //  SEND LOGIN ALERT
 // ------------------------------------------------------
 export const sendLoginAlert = async (email, userName, deviceInfo) => {
+  const resend = getResend();
+  if (!resend) {
+    console.log(`[Email Mock] Login alert for ${email}`);
+    return { success: true };
+  }
+
   const content = `
     <h1 style="margin:0 0 24px 0;font-size:24px;font-weight:600;color:#000000;letter-spacing:-0.5px;">New Sign-in Detected</h1>
     
@@ -164,11 +178,11 @@ export const sendLoginAlert = async (email, userName, deviceInfo) => {
     <div style="margin-bottom:32px;">
       <div style="margin-bottom:12px;display:flex;">
         <span style="font-weight:600;width:80px;color:#888888;">Device</span>
-        <span style="color:#000000;">${deviceInfo.os} &bull; ${deviceInfo.browser}</span>
+        <span style="color:#000000;">${deviceInfo?.os || 'Unknown'} &bull; ${deviceInfo?.browser || 'Unknown'}</span>
       </div>
       <div style="margin-bottom:12px;display:flex;">
         <span style="font-weight:600;width:80px;color:#888888;">Location</span>
-        <span style="color:#000000;">${deviceInfo.ip === '::1' ? 'Localhost' : deviceInfo.ip}</span>
+        <span style="color:#000000;">${deviceInfo?.ip === '::1' ? 'Localhost' : (deviceInfo?.ip || 'Unknown')}</span>
       </div>
       <div style="display:flex;">
         <span style="font-weight:600;width:80px;color:#888888;">Time</span>
@@ -196,6 +210,5 @@ export const sendLoginAlert = async (email, userName, deviceInfo) => {
     return { success: false, error: error.message || String(error) };
   }
 };
-
 
 export default transporter;

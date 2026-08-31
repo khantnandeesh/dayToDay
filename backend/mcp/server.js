@@ -1,6 +1,8 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { S3Client, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
@@ -8,19 +10,52 @@ import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
 import Session from '../models/Session.js';
 import McpOAuthClient from '../models/McpOAuthClient.js';
+import DriveFile from '../models/DriveFile.js';
+import DriveFolder from '../models/DriveFolder.js';
+import VaultSettings from '../models/VaultSettings.js';
+import VaultItem from '../models/VaultItem.js';
 
 // Holds active SSE transports keyed by MCP sessionId so the POST
 // /mcp/messages endpoint can route client messages to the right server.
 export const mcpTransports = new Map();
 
+// Helper to determine the public base URL
+export function getPublicBaseUrl(req) {
+  if (process.env.MCP_PUBLIC_URL) {
+    return process.env.MCP_PUBLIC_URL.replace(/\/$/, '');
+  }
+  const proto = req.headers?.['x-forwarded-proto'] || (req.connection?.encrypted ? 'https' : 'https');
+  const host = req.headers?.['x-forwarded-host'] || req.headers?.host || 'localhost:3000';
+  return `${proto}://${host}`.replace(/\/$/, '');
+}
+
+// Lazy S3 / Cloudflare R2 Client setup
+let r2Client = null;
+function getR2Client() {
+  if (!r2Client && process.env.R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID) {
+    r2Client = new S3Client({
+      region: process.env.R2_REGION || 'auto',
+      endpoint: process.env.R2_ENDPOINT,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY_ID,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+      },
+    });
+  }
+  return r2Client;
+}
+
+const BUCKET_NAME = process.env.R2_BUCKET || 'drivealike';
+const QUOTA_LIMIT = 5 * 1024 * 1024 * 1024; // 5 GB
+
+const getUserStorageUsage = async (userId) => {
+  const files = await DriveFile.find({ user: userId, isTrash: false });
+  return files.reduce((acc, file) => acc + (file.size || 0), 0);
+};
+
 // ---------------------------------------------------------------------------
 // MCP authentication
 // ---------------------------------------------------------------------------
-// Reuses the same JWT + active-session contract as your `protect` middleware,
-// but ALSO accepts the token via `?token=` query string or cookie. This is
-// required because the browser `EventSource` API cannot set request headers,
-// so a Bearer header is impossible for the initial SSE GET from a browser.
-// Server-to-server / Gemini clients can still send `Authorization: Bearer`.
 export async function authenticateMcpRequest(req, res, next) {
   let token =
     (req.headers.authorization && req.headers.authorization.startsWith('Bearer')
@@ -30,6 +65,11 @@ export async function authenticateMcpRequest(req, res, next) {
     req.cookies?.token;
 
   if (!token) {
+    const base = getPublicBaseUrl(req);
+    res.setHeader(
+      'WWW-Authenticate',
+      `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource", scope="mcp"`
+    );
     return res
       .status(401)
       .json({ success: false, message: 'Unauthorized: missing token' });
@@ -40,13 +80,12 @@ export async function authenticateMcpRequest(req, res, next) {
 
     let user;
     if (decoded.mcp) {
-      // OAuth-issued access token (Gemini / custom connected apps).
-      // No Session document exists for these; identity is the signed `id`.
+      // OAuth-issued access token (Gemini / Claude / Cursor / custom connected apps).
       user = await User.findById(decoded.id).select(
         '-password -twoFactorCode -twoFactorCodeExpires'
       );
     } else {
-      // Enforce an active, non-expired session (mirrors middleware/auth.js).
+      // Enforce an active, non-expired session.
       const session = await Session.findOne({
         token,
         userId: decoded.id,
@@ -74,14 +113,18 @@ export async function authenticateMcpRequest(req, res, next) {
     req.token = token;
     next();
   } catch (err) {
+    const base = getPublicBaseUrl(req);
+    res.setHeader(
+      'WWW-Authenticate',
+      `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource", scope="mcp"`
+    );
     return res
       .status(401)
-      .json({ success: false, message: 'Unauthorized' });
+      .json({ success: false, message: 'Unauthorized: invalid token' });
   }
 }
 
 // Resolve the authenticated user id from a request (Bearer header / cookie / ?token).
-// Throws if missing or invalid. Supports both session JWTs and OAuth `mcp` tokens.
 export async function resolveUserId(req) {
   let token =
     (req.headers.authorization && req.headers.authorization.startsWith('Bearer')
@@ -116,13 +159,10 @@ export async function resolveUserId(req) {
 }
 
 // ---------------------------------------------------------------------------
-// OAuth 2.0 (client_credentials) — for Gemini "custom connected apps".
-// Gemini discovers this via /.well-known/oauth-authorization-server, then POSTs
-// client_id + client_secret to /oauth/token and receives a user-scoped JWT.
+// OAuth 2.0 (RFC 8414 & RFC 7591)
 // ---------------------------------------------------------------------------
 export function oauthMetadata(req, res) {
-  // This must be the public backend origin that Gemini can reach over HTTPS.
-  const base = process.env.MCP_PUBLIC_URL || ('https://' + req.headers.host);
+  const base = getPublicBaseUrl(req);
   res.json({
     issuer: base,
     authorization_endpoint: base + '/oauth/authorize',
@@ -300,30 +340,27 @@ export async function oauthRegister(req, res) {
 }
 
 // Authorization endpoint (Authorization Code flow with PKCE).
-// Gemini redirects the user's browser here; we authenticate the user (reusing
-// an existing session cookie if present, otherwise a minimal login form) and
-// redirect back to Google's redirect_uri with a short-lived `code`. The code is
-// a signed JWT (no server-side state needed, works across Heroku dynos).
-// ---------------------------------------------------------------------------
 function renderLoginForm(params) {
   const hidden = Object.entries(params)
     .map(([k, v]) => `<input type="hidden" name="${k}" value="${String(v).replace(/"/g, '&quot;')}">`)
     .join('');
   return `<!doctype html><html><head><meta charset="utf-8"><title>Authorize DayToDay MCP</title>
-  <style>body{font-family:system-ui,sans-serif;background:#f5f5f5;display:flex;min-height:100vh;align-items:center;justify-content:center}
-  .card{background:#fff;padding:32px 28px;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.08);width:340px}
-  h1{font-size:18px;margin:0 0 4px} p{color:#666;font-size:13px;margin:0 0 20px}
-  input{width:100%;padding:10px 12px;margin-bottom:12px;border:1px solid #ddd;border-radius:8px;box-sizing:border-box}
-  button{width:100%;padding:11px;background:#111;color:#fff;border:0;border-radius:8px;font-weight:600;cursor:pointer}
-  .muted{font-size:11px;color:#999;margin-top:14px}</style></head>
+  <style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:16px;}
+  .card{background:#1e293b;padding:32px 28px;border-radius:14px;border:1px solid #334155;box-shadow:0 8px 30px rgba(0,0,0,.4);width:100%;max-width:360px;box-sizing:border-box;}
+  h1{font-size:20px;margin:0 0 8px;font-weight:700;} p{color:#94a3b8;font-size:14px;margin:0 0 20px;line-height:1.5;}
+  input{width:100%;padding:12px 14px;margin-bottom:12px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:8px;box-sizing:border-box;font-size:14px;}
+  input:focus{outline:none;border-color:#38bdf8;box-shadow:0 0 0 1px #38bdf8;}
+  button{width:100%;padding:12px;background:#38bdf8;color:#0f172a;border:0;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;transition:opacity 0.2s;}
+  button:hover{opacity:0.9;}
+  .muted{font-size:12px;color:#64748b;margin-top:16px;text-align:center;}</style></head>
   <body><form class="card" method="post">
-    <h1>Connect DayToDay to Gemini</h1>
-    <p>Sign in to grant Gemini access to your account.</p>
+    <h1>Connect DayToDay to AI Agent</h1>
+    <p>Sign in to grant Claude, Gemini, Cursor, or your AI client access to your DayToDay account.</p>
     ${hidden}
     <input name="email" type="email" placeholder="Email" autocomplete="username" required>
     <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
-    <button type="submit">Authorize</button>
-    <div class="muted">DayToDay Secure Vault &bull; MCP OAuth</div>
+    <button type="submit">Authorize Connection</button>
+    <div class="muted">DayToDay Cloud &bull; Model Context Protocol</div>
   </form></body></html>`;
 }
 
@@ -393,7 +430,7 @@ export async function oauthAuthorize(req, res) {
     res.status(401).setHeader('Content-Type', 'text/html');
     return res.send(
       renderLoginForm({ ...q, error: '1' }) +
-        '<p style="color:#c00;font-size:12px">Invalid email or password.</p>'
+        '<p style="color:#ef4444;font-size:13px;text-align:center;margin-top:12px;">Invalid email or password.</p>'
     );
   }
 
@@ -517,28 +554,25 @@ function jsonResult(data, isError = false) {
   };
 }
 
-// Build a fresh MCP Server. `ctx` is a mutable per-connection object
-// ({ userId: null }). The server is connected on the (possibly anonymous) SSE
-// GET so the endpoint event is emitted; the real user is bound by setting
-// ctx.userId on the first authenticated POST /mcp/messages. Every tool call is
-// therefore inherently scoped to that user.
+// Build a fresh MCP Server. `ctx` is a mutable per-connection object ({ userId }).
 function buildServer(ctx) {
   const server = new Server(
-    { name: 'daytoday-mcp', version: '1.0.0' },
+    { name: 'daytoday-mcp', version: '2.0.0' },
     { capabilities: { tools: {} } }
   );
 
   const tools = [
+    // 1. Account & Security Tools
     {
       name: 'get_security_profile',
       description:
-        "Retrieve the authenticated user's basic profile and 2FA enablement status. Never returns passwords or 2FA secrets.",
+        "Retrieve the authenticated user's profile and 2FA enablement status. Never returns passwords or 2FA secrets.",
       inputSchema: { type: 'object', properties: {} },
     },
     {
       name: 'list_active_devices',
       description:
-        'List all active sessions/devices for the authenticated user, including IP, OS, browser and expiration.',
+        'List all active sessions/devices for the authenticated user, including IP, OS, browser, device name, and expiration.',
       inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -562,6 +596,222 @@ function buildServer(ctx) {
         'Return recent security/device activity for the authenticated user, derived from device history and active sessions.',
       inputSchema: { type: 'object', properties: {} },
     },
+
+    // 2. Drive & Storage Tools
+    {
+      name: 'get_storage_quota',
+      description:
+        'Get Drive storage usage metrics: bytes used, formatted human-readable size (MB/GB), 5GB quota limit, percentage used, and total file count.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'list_drive_files',
+      description:
+        'List files and folders in DayToDay Drive for the authenticated user. Supports folder navigation, trash viewing, and keyword filtering.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          folderId: {
+            type: 'string',
+            description: "Parent folder ID to list, or 'root' / omit for the root directory.",
+          },
+          trash: {
+            type: 'boolean',
+            description: 'Set to true to list items currently in the trash bin.',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of files to return (default 50).',
+          },
+        },
+      },
+    },
+    {
+      name: 'search_drive',
+      description:
+        'Search files and folders across Drive by name, keyword, or MIME type.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Keyword to search for in file or folder names.',
+          },
+          type: {
+            type: 'string',
+            description: "Optional filter: 'all', 'file', 'folder', 'image', 'document', 'pdf'.",
+          },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'create_drive_folder',
+      description:
+        'Create a new folder in Drive at the root level or inside a parent folder.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'Name of the folder to create.',
+          },
+          parentId: {
+            type: 'string',
+            description: 'Optional parent folder MongoDB ID.',
+          },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'rename_drive_item',
+      description:
+        'Rename an existing file or folder in Drive.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: 'The ID of the file or folder to rename.',
+          },
+          type: {
+            type: 'string',
+            enum: ['file', 'folder'],
+            description: "Whether the item is a 'file' or 'folder'.",
+          },
+          name: {
+            type: 'string',
+            description: 'The new name for the item.',
+          },
+        },
+        required: ['id', 'type', 'name'],
+      },
+    },
+    {
+      name: 'delete_drive_item',
+      description:
+        'Move a file or folder in Drive to the trash bin.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: 'The ID of the file or folder to move to trash.',
+          },
+          type: {
+            type: 'string',
+            enum: ['file', 'folder'],
+            description: "Whether the item is a 'file' or 'folder'.",
+          },
+        },
+        required: ['id', 'type'],
+      },
+    },
+    {
+      name: 'restore_drive_item',
+      description:
+        'Restore a file or folder from the trash bin back to its original location.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: 'The ID of the file or folder to restore.',
+          },
+          type: {
+            type: 'string',
+            enum: ['file', 'folder'],
+            description: "Whether the item is a 'file' or 'folder'.",
+          },
+        },
+        required: ['id', 'type'],
+      },
+    },
+    {
+      name: 'delete_permanent_drive_item',
+      description:
+        'Permanently delete a file or folder from Drive and purge its cloud storage.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: 'The ID of the file or folder to permanently delete.',
+          },
+          type: {
+            type: 'string',
+            enum: ['file', 'folder'],
+            description: "Whether the item is a 'file' or 'folder'.",
+          },
+        },
+        required: ['id', 'type'],
+      },
+    },
+    {
+      name: 'get_file_download_url',
+      description:
+        'Generate a secure, time-limited presigned download or preview URL for a file in Drive.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          fileId: {
+            type: 'string',
+            description: 'The ID of the file to generate the download URL for.',
+          },
+          download: {
+            type: 'boolean',
+            description: 'Set to true to force browser attachment download header.',
+          },
+        },
+        required: ['fileId'],
+      },
+    },
+
+    // 3. Vault & Status Tools
+    {
+      name: 'get_vault_status',
+      description:
+        'Check if the authenticated user has initialized their zero-knowledge encrypted vault.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'list_vault_items',
+      description:
+        'List metadata of encrypted items stored in the user vault (ID, item type like login/card/note/identity, favorite flag, updated time). Note: item contents remain zero-knowledge client-encrypted for maximum security.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          type: {
+            type: 'string',
+            description: "Optional filter by item type: 'all', 'login', 'card', 'secure_note', 'identity'.",
+          },
+          favoritesOnly: {
+            type: 'boolean',
+            description: 'Filter for items marked as favorite.',
+          },
+        },
+      },
+    },
+    {
+      name: 'toggle_vault_favorite',
+      description:
+        'Toggle or set the favorite status of a vault item.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          itemId: {
+            type: 'string',
+            description: 'The ID of the vault item.',
+          },
+          isFavorite: {
+            type: 'boolean',
+            description: 'Optional explicit favorite status. If omitted, flips the current status.',
+          },
+        },
+        required: ['itemId'],
+      },
+    },
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
@@ -569,7 +819,7 @@ function buildServer(ctx) {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
-    // Tools require an authenticated, bound user.
+    // Tools require an authenticated user.
     if (!ctx.userId) {
       return jsonResult(
         { success: false, error: 'Not authenticated' },
@@ -579,6 +829,8 @@ function buildServer(ctx) {
 
     try {
       switch (name) {
+        // -------------------------------------------------------------------
+        // 1. Account & Security
         // -------------------------------------------------------------------
         case 'get_security_profile': {
           const u = await User.findById(ctx.userId).select(
@@ -595,7 +847,6 @@ function buildServer(ctx) {
           });
         }
 
-        // -------------------------------------------------------------------
         case 'list_active_devices': {
           const sessions = await Session.find({
             userId: ctx.userId,
@@ -616,12 +867,10 @@ function buildServer(ctx) {
           return jsonResult({ count: devices.length, devices });
         }
 
-        // -------------------------------------------------------------------
         case 'revoke_device_session': {
           const { sessionId } = args || {};
           if (!sessionId) throw new Error('sessionId is required');
 
-          // Ownership enforced by filtering on userId.
           const session = await Session.findOne({
             _id: sessionId,
             userId: ctx.userId,
@@ -641,7 +890,6 @@ function buildServer(ctx) {
           session.isActive = false;
           await session.save();
 
-          // Keep the user's trusted-device list in sync.
           const u = await User.findById(ctx.userId);
           if (u && u.devices?.some((d) => d.deviceId === session.deviceId)) {
             u.devices = u.devices.filter(
@@ -652,16 +900,13 @@ function buildServer(ctx) {
 
           return jsonResult({
             success: true,
-            message: 'Device session revoked.',
+            message: 'Device session revoked successfully.',
             sessionId,
           });
         }
 
-        // -------------------------------------------------------------------
         case 'get_account_audit_log': {
-          const u = await User
-            .findById(ctx.userId)
-            .select('devices');
+          const u = await User.findById(ctx.userId).select('devices');
           const recentDevices = (u?.devices || [])
             .map((d) => ({
               deviceName: d.deviceName,
@@ -681,7 +926,6 @@ function buildServer(ctx) {
           }).select('deviceInfo createdAt expiresAt');
 
           return jsonResult({
-            note: 'No dedicated audit-log collection exists; this is derived from device history and active sessions.',
             recentDevices,
             activeSessions: activeSessions.map((s) => ({
               sessionId: s._id,
@@ -689,6 +933,335 @@ function buildServer(ctx) {
               createdAt: s.createdAt,
               expiresAt: s.expiresAt,
             })),
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // 2. Drive & Storage Management
+        // -------------------------------------------------------------------
+        case 'get_storage_quota': {
+          const usedBytes = await getUserStorageUsage(ctx.userId);
+          const totalFiles = await DriveFile.countDocuments({ user: ctx.userId, isTrash: false });
+          const totalFolders = await DriveFolder.countDocuments({ user: ctx.userId, isTrash: false });
+          const usedMB = (usedBytes / (1024 * 1024)).toFixed(2);
+          const usedGB = (usedBytes / (1024 * 1024 * 1024)).toFixed(3);
+          const percentUsed = ((usedBytes / QUOTA_LIMIT) * 100).toFixed(2);
+
+          return jsonResult({
+            usedBytes,
+            usedFormatted: usedBytes > 1024 * 1024 * 1024 ? `${usedGB} GB` : `${usedMB} MB`,
+            quotaLimitBytes: QUOTA_LIMIT,
+            quotaLimitFormatted: '5.00 GB',
+            percentUsed: `${percentUsed}%`,
+            totalFiles,
+            totalFolders,
+          });
+        }
+
+        case 'list_drive_files': {
+          const { folderId, trash, limit = 50 } = args || {};
+          const isTrash = trash === true;
+
+          const fileFilter = { user: ctx.userId, isTrash };
+          if (!isTrash) {
+            fileFilter.folder = folderId && folderId !== 'root' ? folderId : null;
+          }
+
+          const folderFilter = { user: ctx.userId, isTrash };
+          if (!isTrash) {
+            folderFilter.parent = folderId && folderId !== 'root' ? folderId : null;
+          }
+
+          const [fileDocs, folderDocs, usedBytes] = await Promise.all([
+            DriveFile.find(fileFilter).sort({ createdAt: -1 }).limit(Math.min(limit, 200)),
+            DriveFolder.find(folderFilter).sort({ name: 1 }),
+            getUserStorageUsage(ctx.userId),
+          ]);
+
+          const files = fileDocs.map((f) => ({
+            id: f._id,
+            name: f.name,
+            size: f.size,
+            sizeFormatted: `${(f.size / (1024 * 1024)).toFixed(2)} MB`,
+            mimeType: f.mimeType,
+            folder: f.folder,
+            isTrash: f.isTrash,
+            isPublic: f.isPublic,
+            createdAt: f.createdAt,
+            updatedAt: f.updatedAt,
+          }));
+
+          const folders = folderDocs.map((fd) => ({
+            id: fd._id,
+            name: fd.name,
+            parent: fd.parent,
+            isTrash: fd.isTrash,
+            createdAt: fd.createdAt,
+          }));
+
+          return jsonResult({
+            folderCount: folders.length,
+            fileCount: files.length,
+            folders,
+            files,
+            storageUsedBytes: usedBytes,
+            storageLimitBytes: QUOTA_LIMIT,
+          });
+        }
+
+        case 'search_drive': {
+          const { query, type = 'all' } = args || {};
+          if (!query || typeof query !== 'string') {
+            throw new Error('Search query is required');
+          }
+
+          const regex = new RegExp(query.trim(), 'i');
+          const fileFilter = { user: ctx.userId, isTrash: false, name: regex };
+          const folderFilter = { user: ctx.userId, isTrash: false, name: regex };
+
+          if (type === 'image') fileFilter.mimeType = /^image\//i;
+          else if (type === 'pdf') fileFilter.mimeType = /pdf/i;
+          else if (type === 'document') fileFilter.mimeType = /(text|document|sheet|pdf|word)/i;
+
+          const [files, folders] = await Promise.all([
+            type === 'folder' ? [] : DriveFile.find(fileFilter).limit(50),
+            type !== 'all' && type !== 'folder' ? [] : DriveFolder.find(folderFilter).limit(20),
+          ]);
+
+          return jsonResult({
+            query,
+            totalMatches: files.length + folders.length,
+            folders: folders.map((f) => ({ id: f._id, name: f.name, parent: f.parent })),
+            files: files.map((f) => ({
+              id: f._id,
+              name: f.name,
+              size: f.size,
+              mimeType: f.mimeType,
+              folder: f.folder,
+              createdAt: f.createdAt,
+            })),
+          });
+        }
+
+        case 'create_drive_folder': {
+          const { name, parentId } = args || {};
+          if (!name || !name.trim()) throw new Error('Folder name is required');
+
+          const folder = new DriveFolder({
+            user: ctx.userId,
+            name: name.trim(),
+            parent: parentId || null,
+          });
+          await folder.save();
+
+          return jsonResult({
+            success: true,
+            message: 'Folder created successfully.',
+            folder: {
+              id: folder._id,
+              name: folder.name,
+              parent: folder.parent,
+              createdAt: folder.createdAt,
+            },
+          });
+        }
+
+        case 'rename_drive_item': {
+          const { id, type, name } = args || {};
+          if (!id) throw new Error('Item ID is required');
+          if (!name || !name.trim()) throw new Error('New name is required');
+
+          if (type === 'file') {
+            const file = await DriveFile.findOneAndUpdate(
+              { _id: id, user: ctx.userId },
+              { name: name.trim() },
+              { new: true }
+            );
+            if (!file) throw new Error('File not found');
+            return jsonResult({ success: true, message: 'File renamed', item: file });
+          } else {
+            const folder = await DriveFolder.findOneAndUpdate(
+              { _id: id, user: ctx.userId },
+              { name: name.trim() },
+              { new: true }
+            );
+            if (!folder) throw new Error('Folder not found');
+            return jsonResult({ success: true, message: 'Folder renamed', item: folder });
+          }
+        }
+
+        case 'delete_drive_item': {
+          const { id, type } = args || {};
+          if (!id) throw new Error('Item ID is required');
+
+          if (type === 'file') {
+            const file = await DriveFile.findOneAndUpdate(
+              { _id: id, user: ctx.userId },
+              { isTrash: true, trashDate: new Date() },
+              { new: true }
+            );
+            if (!file) throw new Error('File not found');
+            return jsonResult({ success: true, message: 'File moved to trash', id });
+          } else {
+            const folder = await DriveFolder.findOneAndUpdate(
+              { _id: id, user: ctx.userId },
+              { isTrash: true, trashDate: new Date() },
+              { new: true }
+            );
+            if (!folder) throw new Error('Folder not found');
+            return jsonResult({ success: true, message: 'Folder moved to trash', id });
+          }
+        }
+
+        case 'restore_drive_item': {
+          const { id, type } = args || {};
+          if (!id) throw new Error('Item ID is required');
+
+          if (type === 'file') {
+            const file = await DriveFile.findOneAndUpdate(
+              { _id: id, user: ctx.userId },
+              { isTrash: false, trashDate: null },
+              { new: true }
+            );
+            if (!file) throw new Error('File not found');
+            return jsonResult({ success: true, message: 'File restored from trash', id });
+          } else {
+            const folder = await DriveFolder.findOneAndUpdate(
+              { _id: id, user: ctx.userId },
+              { isTrash: false, trashDate: null },
+              { new: true }
+            );
+            if (!folder) throw new Error('Folder not found');
+            return jsonResult({ success: true, message: 'Folder restored from trash', id });
+          }
+        }
+
+        case 'delete_permanent_drive_item': {
+          const { id, type } = args || {};
+          if (!id) throw new Error('Item ID is required');
+          const r2 = getR2Client();
+
+          if (type === 'file') {
+            const file = await DriveFile.findOne({ _id: id, user: ctx.userId });
+            if (!file) throw new Error('File not found');
+
+            if (r2 && file.r2Key) {
+              try {
+                await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: file.r2Key }));
+              } catch (err) {
+                console.error('R2 deletion error:', err);
+              }
+            }
+            await file.deleteOne();
+            return jsonResult({ success: true, message: 'File permanently deleted', id });
+          } else {
+            const deleteFolderRecursive = async (folderId) => {
+              const subfolders = await DriveFolder.find({ parent: folderId, user: ctx.userId });
+              for (const sub of subfolders) {
+                await deleteFolderRecursive(sub._id);
+              }
+              const files = await DriveFile.find({ folder: folderId, user: ctx.userId });
+              for (const f of files) {
+                if (r2 && f.r2Key) {
+                  try {
+                    await r2.send(new DeleteObjectCommand({ Bucket: BUCKET_NAME, Key: f.r2Key }));
+                  } catch (e) {
+                    console.error(e);
+                  }
+                }
+                await f.deleteOne();
+              }
+              await DriveFolder.deleteOne({ _id: folderId });
+            };
+
+            await deleteFolderRecursive(id);
+            return jsonResult({ success: true, message: 'Folder and contents permanently deleted', id });
+          }
+        }
+
+        case 'get_file_download_url': {
+          const { fileId, download } = args || {};
+          if (!fileId) throw new Error('fileId is required');
+
+          const file = await DriveFile.findOne({ _id: fileId, user: ctx.userId });
+          if (!file) throw new Error('File not found');
+
+          const r2 = getR2Client();
+          if (!r2) {
+            throw new Error('Cloud storage (Cloudflare R2) is not configured on this server.');
+          }
+
+          const disposition = download ? 'attachment' : 'inline';
+          const command = new GetObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: file.r2Key,
+            ResponseContentDisposition: `${disposition}; filename="${file.name}"`,
+          });
+
+          const url = await getSignedUrl(r2, command, { expiresIn: 3600 });
+          return jsonResult({
+            fileId: file._id,
+            fileName: file.name,
+            fileSize: file.size,
+            mimeType: file.mimeType,
+            downloadUrl: url,
+            expiresInSeconds: 3600,
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // 3. Vault & Status
+        // -------------------------------------------------------------------
+        case 'get_vault_status': {
+          const settings = await VaultSettings.findOne({ user: ctx.userId });
+          const itemCount = await VaultItem.countDocuments({ user: ctx.userId });
+          const favCount = await VaultItem.countDocuments({ user: ctx.userId, isFavorite: true });
+
+          return jsonResult({
+            isInitialized: !!settings,
+            totalItems: itemCount,
+            favoriteItems: favCount,
+            customTemplatesCount: settings?.customTemplates?.length || 0,
+            hasSalt: !!settings?.salt,
+          });
+        }
+
+        case 'list_vault_items': {
+          const { type, favoritesOnly } = args || {};
+          const filter = { user: ctx.userId };
+          if (type && type !== 'all') filter.type = type;
+          if (favoritesOnly) filter.isFavorite = true;
+
+          const items = await VaultItem.find(filter).sort({ updatedAt: -1 });
+
+          return jsonResult({
+            count: items.length,
+            items: items.map((item) => ({
+              id: item._id,
+              type: item.type,
+              isFavorite: item.isFavorite,
+              updatedAt: item.updatedAt,
+              createdAt: item.createdAt,
+            })),
+            note: 'Vault item sensitive secrets are protected with client-side zero-knowledge AES-GCM encryption.',
+          });
+        }
+
+        case 'toggle_vault_favorite': {
+          const { itemId, isFavorite } = args || {};
+          if (!itemId) throw new Error('itemId is required');
+
+          const item = await VaultItem.findOne({ _id: itemId, user: ctx.userId });
+          if (!item) throw new Error('Vault item not found');
+
+          item.isFavorite = isFavorite !== undefined ? Boolean(isFavorite) : !item.isFavorite;
+          item.updatedAt = Date.now();
+          await item.save();
+
+          return jsonResult({
+            success: true,
+            itemId: item._id,
+            isFavorite: item.isFavorite,
           });
         }
 

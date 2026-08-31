@@ -1,7 +1,11 @@
 {
+  "name": "daytoday-app",
   "private": true,
+  "type": "module",
   "scripts": {
-    "start": "cd backend && npm start",
+    "start": "node backend/index.js",
+    "build": "cd frontend && npm install --include=dev && npm run build",
+    "test:mcp": "node backend/tests/mcp-compatibility.mjs",
     "postinstall": "cd backend && npm install"
   }
 }

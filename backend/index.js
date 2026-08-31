@@ -2,166 +2,89 @@ import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import connectDB from './config/db.js';
-import authRoutes from './routes/authRoutes.js';
-import vaultRoutes from './routes/vaultRoutes.js';
-import driveRoutes from './routes/driveRoutes.js';
-import AllowedOrigin from './models/AllowedOrigin.js'; // Added for dynamic CORS
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { authenticateMcpRequest, buildServer, mcpTransports, oauthMetadata, oauthRegister, oauthToken, oauthAuthorize, resolveUserId } from './mcp/server.js'; // MCP Server (SSE) + OAuth
-import { handleStreamableMcp } from './mcp/streamable.js';
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
 import xss from 'xss-clean';
 
-dotenv.config(); // Load env vars early
+import connectDB from './config/db.js';
+import authRoutes from './routes/authRoutes.js';
+import vaultRoutes from './routes/vaultRoutes.js';
+import driveRoutes from './routes/driveRoutes.js';
+import AllowedOrigin from './models/AllowedOrigin.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import {
+  buildServer,
+  mcpTransports,
+  oauthMetadata,
+  oauthRegister,
+  oauthToken,
+  oauthAuthorize,
+  resolveUserId,
+  getPublicBaseUrl,
+} from './mcp/server.js';
+import { handleStreamableMcp } from './mcp/streamable.js';
+
+dotenv.config();
 
 const app = express();
 
-// Security Middleware
-app.use(helmet());
+// ---------------------------------------------------------------------------
+// Security & Body Parsers
+// ---------------------------------------------------------------------------
+app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(mongoSanitize());
 app.use(xss());
-
-// Body Parsers (Moved up for Admin Panel)
-app.use(express.json({ limit: '10kb' }));
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
-
-app.all('/mcp', handleStreamableMcp);
-
-app.get('/.well-known/oauth-protected-resource', (req, res) => {
-  const base = process.env.MCP_PUBLIC_URL || `https://${req.headers.host}`;
-  res.json({
-    resource: `${base}/mcp`,
-    authorization_servers: [base],
-    scopes_supported: ['mcp'],
-  });
-});
-// --- CORS Admin Interface (SSR) ---
-// Placed BEFORE CORS middleware to bypass checks
-app.get('/cors-admin', async (req, res) => {
-    try {
-        const origins = await AllowedOrigin.find({});
-        const currentEnv = process.env.FRONTEND_URL || 'Not Set';
-        
-        const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>CORS Manager - DayToDay</title>
-        </head>
-        <body class="bg-slate-100 min-h-screen p-8 font-sans">
-            <div class="max-w-2xl mx-auto bg-white rounded-xl shadow-lg overflow-hidden">
-                <div class="bg-slate-900 p-6 text-white flex justify-between items-center">
-                    <h1 class="text-2xl font-bold">🛡️ CORS Manager</h1>
-                    <span class="text-xs bg-slate-700 px-2 py-1 rounded">Admin Panel</span>
-                </div>
-                
-                <div class="p-6 space-y-6">
-                    <div class="bg-blue-50 border border-blue-200 p-4 rounded-lg">
-                        <div class="text-xs font-bold text-blue-600 uppercase mb-1">Environment Variable (Static)</div>
-                        <code class="text-blue-900 font-mono">${currentEnv}</code>
-                    </div>
-
-                    <div>
-                        <h2 class="text-lg font-bold text-slate-800 mb-3">Allowed Dynamic Origins</h2>
-                        <div class="space-y-2">
-                            ${origins.length === 0 ? '<p class="text-slate-400 italic">No dynamic origins added yet.</p>' : ''}
-                            ${origins.map(o => `
-                                <div class="flex items-center justify-between bg-slate-50 p-3 rounded border border-slate-200">
-                                    <div class="font-mono text-sm text-slate-700">${o.url}</div>
-                                    <form action="/cors-admin/delete" method="POST" onsubmit="return confirm('Remove this origin?');">
-                                        <input type="hidden" name="id" value="${o._id}">
-                                        <button type="submit" class="text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded transition">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-1 1-1h6c0 0 1 0 1 1v2"/></svg>
-                                        </button>
-                                    </form>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-
-                    <form action="/cors-admin/add" method="POST" class="mt-6 border-t pt-6">
-                        <label class="block text-sm font-medium text-slate-700 mb-2">Add New Origin</label>
-                        <div class="flex gap-2">
-                            <input type="url" name="url" placeholder="https://example.com" required 
-                                class="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
-                            <button type="submit" class="bg-slate-900 text-white px-6 py-2 rounded-lg hover:bg-slate-800 transition font-medium">
-                                Add
-                            </button>
-                        </div>
-                        <p class="text-xs text-slate-400 mt-2">Must include protocol (https://)</p>
-                    </form>
-                </div>
-            </div>
-        </body>
-        </html>
-        `;
-        res.send(html);
-    } catch (error) {
-        res.status(500).send("Error loading admin: " + error.message);
-    }
-});
-
-app.post('/cors-admin/add', async (req, res) => {
-    try {
-        let { url } = req.body;
-        if (url.endsWith('/')) url = url.slice(0, -1);
-        await AllowedOrigin.create({ url });
-        res.redirect('/cors-admin');
-    } catch (error) {
-        res.status(400).send("Failed to add origin: " + error.message);
-    }
-});
-
-app.post('/cors-admin/delete', async (req, res) => {
-    try {
-        await AllowedOrigin.findByIdAndDelete(req.body.id);
-        res.redirect('/cors-admin');
-    } catch (error) {
-        res.status(400).send("Failed to delete");
-    }
-});
-
+// ---------------------------------------------------------------------------
 // Dynamic CORS Configuration
+// ---------------------------------------------------------------------------
 const getAllowedOrigins = async () => {
+  try {
     const dbOrigins = await AllowedOrigin.find({});
-    const urls = dbOrigins.map(o => o.url);
+    const urls = dbOrigins.map((o) => o.url);
     if (process.env.FRONTEND_URL) urls.push(process.env.FRONTEND_URL);
-    return [...new Set(urls)]; 
+    return [...new Set(urls)];
+  } catch {
+    return process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [];
+  }
 };
 
 const corsOptions = {
-    origin: async function (origin, callback) {
-        if (!origin) return callback(null, true);
-        try {
-            const allowedOrigins = await getAllowedOrigins();
-            if (allowedOrigins.indexOf(origin) !== -1) {
-                callback(null, true);
-            } else {
-                callback(new Error('Not allowed by CORS'));
-            }
-        } catch (err) {
-            callback(err);
-        }
-    },
-    credentials: true,
+  origin: async function (origin, callback) {
+    if (!origin) return callback(null, true);
+    try {
+      const allowedOrigins = await getAllowedOrigins();
+      if (allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    } catch (err) {
+      callback(err);
+    }
+  },
+  credentials: true,
 };
 
-// Apply CORS. The MCP SSE endpoint is consumed by Gemini's browser-based
-// "connected app" UI via cross-origin EventSource, so those routes get
-// permissive CORS (Bearer/OAuth-authenticated, so open CORS is safe).
-// Everything else keeps the stricter origin allow-list.
+// Permissive CORS for MCP & OAuth endpoints (consumed by Gemini, Claude, Cursor, AI agents, EventSource)
 const mcpCors = (req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-  // helmet() sets Cross-Origin-Resource-Policy: same-origin, which makes a
-  // cross-origin browser EventSource (Gemini's UI) refuse the stream. Override
-  // it for these Bearer/OAuth-authenticated routes so the SSE stream is readable.
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Authorization, Content-Type, Mcp-Session-Id, Last-Event-Id, X-Requested-With, Accept, Cache-Control'
+  );
+  res.setHeader(
+    'Access-Control-Expose-Headers',
+    'Mcp-Session-Id, WWW-Authenticate, Content-Type'
+  );
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
   next();
 };
 
@@ -176,42 +99,73 @@ app.use((req, res, next) => {
   return cors(corsOptions)(req, res, next);
 });
 
+// ---------------------------------------------------------------------------
+// Connect to Database
+// ---------------------------------------------------------------------------
 connectDB();
-app.use(cookieParser());
-
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/vault', vaultRoutes);
-app.use('/api/drive', driveRoutes);
 
 // ---------------------------------------------------------------------------
-// MCP Server (Model Context Protocol) over SSE — single port, auth-bound.
-// GET  /mcp/sse      -> establishes the SSE stream (auth required)
-// POST /mcp/messages -> client -> server messages, routed by ?sessionId
-// Both endpoints are protected by authenticateMcpRequest, which enforces a
-// valid JWT + active session. Each connection gets its own Server instance
-// scoped to req.userId, so tools can only touch that user's data.
+// Model Context Protocol (MCP) & OAuth Endpoints
 // ---------------------------------------------------------------------------
-// GET opens the SSE stream WITHOUT requiring auth so clients (and Gemini's
-// "valid MCP server" preflight) receive the `event: endpoint` response. The
-// Server is connected here, but ctx.userId stays null until the first
-// authenticated POST /mcp/messages binds the real user.
+
+// 1. Streamable HTTP MCP Endpoint
+app.all('/mcp', handleStreamableMcp);
+
+// 2. RFC 9728 OAuth 2.0 Protected Resource Metadata
+app.get(
+  ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/*'],
+  (req, res) => {
+    const base = getPublicBaseUrl(req);
+    res.json({
+      resource: `${base}/mcp`,
+      authorization_servers: [base],
+      scopes_supported: ['mcp'],
+      bearer_methods_supported: ['header'],
+    });
+  }
+);
+
+// 3. RFC 8414 OAuth 2.0 Authorization Server Metadata & OpenID Configuration
+app.get(
+  [
+    '/.well-known/oauth-authorization-server',
+    '/.well-known/oauth-authorization-server/*',
+    '/.well-known/openid-configuration',
+  ],
+  oauthMetadata
+);
+
+// 4. OAuth 2.0 Core Endpoints
+app.post('/oauth/register', oauthRegister);
+app.post('/oauth/token', oauthToken);
+app.get('/oauth/authorize', oauthAuthorize);
+app.post('/oauth/authorize', oauthAuthorize);
+
+// 5. MCP Server over SSE (Server-Sent Events)
 app.get('/mcp/sse', async (req, res) => {
-  const ctx = { userId: null };
+  let userId = null;
+  try {
+    userId = await resolveUserId(req);
+  } catch {
+    // Allows anonymous SSE stream establishment for preflight discovery;
+    // authenticated POST /mcp/messages binds the real user.
+  }
+
+  const ctx = { userId };
   const transport = new SSEServerTransport('/mcp/messages', res);
   const server = buildServer(ctx);
 
-  mcpTransports.set(transport.sessionId, { transport, server, ctx });
+  mcpTransports.set(transport.sessionId, { transport, server, ctx, userId: userId ? String(userId) : null });
 
   res.on('close', () => {
     mcpTransports.delete(transport.sessionId);
   });
 
-  await server.connect(transport); // emits the endpoint event
+  await server.connect(transport);
 });
 
 app.post('/mcp/messages', async (req, res) => {
-  const sessionId = req.query.sessionId;
+  const sessionId = req.query.sessionId || req.headers['mcp-session-id'];
   const entry = mcpTransports.get(sessionId);
 
   if (!entry) {
@@ -228,27 +182,119 @@ app.post('/mcp/messages', async (req, res) => {
     return res.status(401).json({ success: false, message: 'Unauthorized' });
   }
 
-  // Bind the authenticated user to this connection's Server.
+  // Bind the authenticated user to this connection
   entry.ctx.userId = userId;
+  entry.userId = String(userId);
 
   await entry.transport.handlePostMessage(req, res);
 });
 
 // ---------------------------------------------------------------------------
-// MCP OAuth 2.0 — supports Dynamic Client Registration and user-scoped tokens.
+// CORS Admin Interface (SSR)
 // ---------------------------------------------------------------------------
-app.get('/.well-known/oauth-authorization-server', oauthMetadata);
-app.post('/oauth/register', oauthRegister);
-app.post('/oauth/token', oauthToken);
-app.get('/oauth/authorize', oauthAuthorize);
-app.post('/oauth/authorize', oauthAuthorize);
+app.get('/cors-admin', async (req, res) => {
+  try {
+    const origins = await AllowedOrigin.find({});
+    const currentEnv = process.env.FRONTEND_URL || 'Not Set';
+
+    const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>CORS Manager - DayToDay</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-slate-900 min-h-screen p-8 font-sans text-slate-100">
+        <div class="max-w-2xl mx-auto bg-slate-800 rounded-xl shadow-2xl border border-slate-700 overflow-hidden">
+            <div class="bg-slate-950 p-6 text-white flex justify-between items-center border-b border-slate-700">
+                <h1 class="text-xl font-bold flex items-center gap-2">🛡️ CORS Origin Manager</h1>
+                <span class="text-xs bg-cyan-950 text-cyan-400 border border-cyan-800 px-3 py-1 rounded-full font-mono">DayToDay Admin</span>
+            </div>
+            
+            <div class="p-6 space-y-6">
+                <div class="bg-slate-900 border border-slate-700 p-4 rounded-lg">
+                    <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Static Frontend Origin</div>
+                    <code class="text-cyan-400 font-mono text-sm">${currentEnv}</code>
+                </div>
+
+                <div>
+                    <h2 class="text-base font-semibold text-slate-200 mb-3">Allowed Dynamic Origins</h2>
+                    <div class="space-y-2">
+                        ${origins.length === 0 ? '<p class="text-slate-500 italic text-sm">No dynamic origins added yet.</p>' : ''}
+                        ${origins.map((o) => `
+                            <div class="flex items-center justify-between bg-slate-900 p-3 rounded-lg border border-slate-700">
+                                <div class="font-mono text-sm text-slate-300">${o.url}</div>
+                                <form action="/cors-admin/delete" method="POST" onsubmit="return confirm('Remove origin ${o.url}?');">
+                                    <input type="hidden" name="id" value="${o._id}">
+                                    <button type="submit" class="text-red-400 hover:text-red-300 hover:bg-red-950/50 p-1.5 rounded transition">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-1 1-1h6c0 0 1 0 1 1v2"/></svg>
+                                    </button>
+                                </form>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <form action="/cors-admin/add" method="POST" class="mt-6 border-t border-slate-700 pt-6">
+                    <label class="block text-sm font-medium text-slate-300 mb-2">Add New Allowed Origin</label>
+                    <div class="flex gap-2">
+                        <input type="url" name="url" placeholder="https://my-app.vercel.app" required 
+                            class="flex-1 px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none text-sm font-mono">
+                        <button type="submit" class="bg-cyan-500 hover:bg-cyan-400 text-slate-950 px-5 py-2 rounded-lg transition font-semibold text-sm">
+                            Add Origin
+                        </button>
+                    </div>
+                    <p class="text-xs text-slate-500 mt-2">Must include full protocol (e.g. https://)</p>
+                </form>
+            </div>
+        </div>
+    </body>
+    </html>
+    `;
+    res.send(html);
+  } catch (error) {
+    res.status(500).send('Error loading admin: ' + error.message);
+  }
+});
+
+app.post('/cors-admin/add', async (req, res) => {
+  try {
+    let { url } = req.body;
+    if (url.endsWith('/')) url = url.slice(0, -1);
+    await AllowedOrigin.create({ url });
+    res.redirect('/cors-admin');
+  } catch (error) {
+    res.status(400).send('Failed to add origin: ' + error.message);
+  }
+});
+
+app.post('/cors-admin/delete', async (req, res) => {
+  try {
+    await AllowedOrigin.findByIdAndDelete(req.body.id);
+    res.redirect('/cors-admin');
+  } catch (error) {
+    res.status(400).send('Failed to delete');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Standard REST API Routes
+// ---------------------------------------------------------------------------
+app.use('/api/auth', authRoutes);
+app.use('/api/vault', vaultRoutes);
+app.use('/api/drive', driveRoutes);
 
 // Health check
-app.get('/health', async(req, res) => {
-  
+app.get('/health', async (req, res) => {
   res.status(200).json({
     success: true,
-    message: 'Server is running',
+    message: 'DayToDay Server is healthy and running',
+    mcp: {
+      streamableEndpoint: '/mcp',
+      sseEndpoint: '/mcp/sse',
+      protectedResourceMetadata: '/.well-known/oauth-protected-resource',
+      authServerMetadata: '/.well-known/oauth-authorization-server',
+    },
     timestamp: new Date().toISOString(),
   });
 });
@@ -263,7 +309,7 @@ app.use((req, res) => {
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  console.error('Server error:', err);
   res.status(err.status || 500).json({
     success: false,
     message: err.message || 'Server error',
@@ -273,7 +319,8 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 Server running on ${process.env.BACKEND_URL}`);
-  console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL}`);
+  console.log(`\n🚀 DayToDay Server running on port ${PORT}`);
+  console.log(`📡 Backend URL: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);
+  console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}\n`);
 });
