@@ -38,6 +38,9 @@ const request = async (path, init = {}, readStream = false) => {
 
 const metadata = await request('/.well-known/oauth-authorization-server');
 if (metadata.status !== 200) fail('OAuth authorization metadata returned ' + metadata.status);
+let metadataJson;
+try { metadataJson = JSON.parse(metadata.body); } catch { fail('OAuth authorization metadata was not JSON'); }
+if (!metadataJson?.registration_endpoint) fail('OAuth metadata is missing registration_endpoint');
 
 const resource = await request('/.well-known/oauth-protected-resource');
 if (resource.status !== 200) fail('Protected-resource metadata returned ' + resource.status);
