@@ -4,8 +4,10 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
 import Session from '../models/Session.js';
+import McpOAuthClient from '../models/McpOAuthClient.js';
 
 // Holds active SSE transports keyed by MCP sessionId so the POST
 // /mcp/messages endpoint can route client messages to the right server.
@@ -119,18 +121,18 @@ export async function resolveUserId(req) {
 // client_id + client_secret to /oauth/token and receives a user-scoped JWT.
 // ---------------------------------------------------------------------------
 export function oauthMetadata(req, res) {
-  // IMPORTANT: use the real public host, never BACKEND_URL (which is
-  // http://localhost:3000 in prod). Gemini follows these URLs, so they must
-  // be the publicly reachable origin.
-  const base = process.env.MCP_PUBLIC_URL || `https://${req.headers.host}`;
+  // This must be the public backend origin that Gemini can reach over HTTPS.
+  const base = process.env.MCP_PUBLIC_URL || ('https://' + req.headers.host);
   res.json({
     issuer: base,
-    authorization_endpoint: `${base}/oauth/authorize`,
-    token_endpoint: `${base}/oauth/token`,
+    authorization_endpoint: base + '/oauth/authorize',
+    token_endpoint: base + '/oauth/token',
+    registration_endpoint: base + '/oauth/register',
     grant_types_supported: ['authorization_code', 'client_credentials'],
     token_endpoint_auth_methods_supported: [
       'client_secret_basic',
       'client_secret_post',
+      'none',
     ],
     response_types_supported: ['code'],
     code_challenge_methods_supported: ['S256'],
@@ -138,7 +140,165 @@ export function oauthMetadata(req, res) {
   });
 }
 
-// ---------------------------------------------------------------------------
+function configuredRedirectUris() {
+  return (process.env.MCP_ALLOWED_REDIRECT_URIS || '')
+    .split(',')
+    .map((uri) => uri.trim())
+    .filter(Boolean);
+}
+
+function isValidRedirectUri(uri) {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.hash) return false;
+    if (parsed.protocol === 'https:') return true;
+    return (
+      parsed.protocol === 'http:' &&
+      ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getStaticOAuthClient(clientId) {
+  if (!process.env.MCP_CLIENT_ID || clientId !== process.env.MCP_CLIENT_ID) {
+    return null;
+  }
+
+  return {
+    clientId: process.env.MCP_CLIENT_ID,
+    static: true,
+    redirectUris: configuredRedirectUris(),
+    grantTypes: ['authorization_code', 'client_credentials'],
+    responseTypes: ['code'],
+    tokenEndpointAuthMethod: 'client_secret_post',
+  };
+}
+
+async function findOAuthClient(clientId) {
+  return getStaticOAuthClient(clientId) || McpOAuthClient.findOne({ clientId });
+}
+
+function getClientCredentials(req) {
+  const auth = req.headers.authorization;
+  if (auth && auth.startsWith('Basic ')) {
+    const decoded = Buffer.from(auth.slice(6), 'base64').toString('utf8');
+    const separator = decoded.indexOf(':');
+    if (separator < 0) return {};
+    return {
+      clientId: decoded.slice(0, separator),
+      clientSecret: decoded.slice(separator + 1),
+    };
+  }
+
+  return {
+    clientId: req.body?.client_id,
+    clientSecret: req.body?.client_secret,
+  };
+}
+
+async function authenticateOAuthClient(req) {
+  const { clientId, clientSecret } = getClientCredentials(req);
+  if (!clientId) return null;
+
+  const staticClient = getStaticOAuthClient(clientId);
+  if (staticClient && clientSecret === process.env.MCP_CLIENT_SECRET) {
+    return staticClient;
+  }
+
+  const client = await McpOAuthClient.findOne({ clientId }).select('+clientSecretHash');
+  if (!client) return null;
+  if (client.tokenEndpointAuthMethod === 'none') return client;
+  if (!clientSecret || !(await bcrypt.compare(clientSecret, client.clientSecretHash))) {
+    return null;
+  }
+
+  return client;
+}
+
+// OAuth 2.0 Dynamic Client Registration (RFC 7591).
+export async function oauthRegister(req, res) {
+  const body = req.body || {};
+  const redirectUris = body.redirect_uris;
+  const grantTypes = body.grant_types || ['authorization_code'];
+  const responseTypes = body.response_types || ['code'];
+  const tokenEndpointAuthMethod = body.token_endpoint_auth_method || 'client_secret_basic';
+  const requestedScopes = body.scope
+    ? String(body.scope).split(/\s+/).filter(Boolean)
+    : ['mcp'];
+
+  if (
+    !Array.isArray(redirectUris) ||
+    redirectUris.length === 0 ||
+    redirectUris.some((uri) => typeof uri !== 'string' || !isValidRedirectUri(uri))
+  ) {
+    return res.status(400).json({
+      error: 'invalid_redirect_uris',
+      error_description: 'redirect_uris must contain absolute HTTPS URLs (or localhost HTTP URLs).',
+    });
+  }
+
+  if (!Array.isArray(grantTypes) || grantTypes.some((grantType) => grantType !== 'authorization_code')) {
+    return res.status(400).json({
+      error: 'invalid_client_metadata',
+      error_description: 'Only the authorization_code grant is supported for dynamically registered clients.',
+    });
+  }
+
+  if (!Array.isArray(responseTypes) || responseTypes.length !== 1 || responseTypes[0] !== 'code') {
+    return res.status(400).json({
+      error: 'invalid_client_metadata',
+      error_description: 'Only the code response type is supported.',
+    });
+  }
+
+  if (!['client_secret_basic', 'client_secret_post', 'none'].includes(tokenEndpointAuthMethod)) {
+    return res.status(400).json({
+      error: 'invalid_client_metadata',
+      error_description: 'Use client_secret_basic, client_secret_post, or none.',
+    });
+  }
+
+  if (requestedScopes.some((scope) => scope !== 'mcp')) {
+    return res.status(400).json({
+      error: 'invalid_client_metadata',
+      error_description: 'Only the mcp scope is supported.',
+    });
+  }
+
+  const clientId = 'daytoday_' + crypto.randomBytes(18).toString('base64url');
+  const clientSecret = tokenEndpointAuthMethod === 'none'
+    ? null
+    : crypto.randomBytes(32).toString('base64url');
+  const clientName = String(body.client_name || 'MCP Client').slice(0, 200);
+  const clientIdIssuedAt = Math.floor(Date.now() / 1000);
+
+  await McpOAuthClient.create({
+    clientId,
+    clientSecretHash: await bcrypt.hash(clientSecret || crypto.randomBytes(32).toString('base64url'), 12),
+    clientName,
+    redirectUris,
+    grantTypes: ['authorization_code'],
+    responseTypes: ['code'],
+    tokenEndpointAuthMethod,
+  });
+
+  const registration = {
+    client_id: clientId,
+    client_id_issued_at: clientIdIssuedAt,
+    client_secret_expires_at: 0,
+    client_name: clientName,
+    redirect_uris: redirectUris,
+    grant_types: ['authorization_code'],
+    response_types: ['code'],
+    token_endpoint_auth_method: tokenEndpointAuthMethod,
+    scope: 'mcp',
+  };
+  if (clientSecret) registration.client_secret = clientSecret;
+  return res.status(201).json(registration);
+}
+
 // Authorization endpoint (Authorization Code flow with PKCE).
 // Gemini redirects the user's browser here; we authenticate the user (reusing
 // an existing session cookie if present, otherwise a minimal login form) and
@@ -168,22 +328,39 @@ function renderLoginForm(params) {
 }
 
 export async function oauthAuthorize(req, res) {
-  const q =
-    req.method === 'POST'
-      ? { ...req.query, ...req.body }
-      : req.query;
-
+  const q = req.method === 'POST' ? { ...req.query, ...req.body } : req.query;
   const {
     response_type,
-    client_id,
-    redirect_uri,
+    client_id: clientId,
+    redirect_uri: redirectUri,
     state,
-    code_challenge,
-    code_challenge_method,
+    code_challenge: codeChallenge,
+    code_challenge_method: codeChallengeMethod,
     scope,
   } = q;
 
-  // Already authenticated via an active session cookie? Short-circuit.
+  if (response_type !== 'code' || !clientId) {
+    return res.status(400).json({ error: 'invalid_request' });
+  }
+
+  const client = await findOAuthClient(clientId);
+  if (!client) return res.status(400).json({ error: 'invalid_client' });
+  if (!redirectUri || !client.redirectUris?.includes(redirectUri)) {
+    return res.status(400).json({ error: 'invalid_redirect_uri' });
+  }
+  if (scope && String(scope).split(/\s+/).some((value) => value !== 'mcp')) {
+    return res.status(400).json({ error: 'invalid_scope' });
+  }
+  if (codeChallenge && codeChallengeMethod !== 'S256') {
+    return res.status(400).json({ error: 'invalid_request' });
+  }
+  if (!client.static && (!codeChallenge || codeChallengeMethod !== 'S256')) {
+    return res.status(400).json({
+      error: 'invalid_request',
+      error_description: 'PKCE with S256 is required.',
+    });
+  }
+
   if (req.cookies?.token) {
     try {
       const d = jwt.verify(req.cookies.token, process.env.JWT_SECRET);
@@ -194,10 +371,10 @@ export async function oauthAuthorize(req, res) {
       });
       if (sess && sess.isValid()) {
         return finishAuthorize(res, d.id, {
-          client_id,
-          redirect_uri,
+          clientId,
+          redirectUri,
           state,
-          code_challenge,
+          codeChallenge,
         });
       }
     } catch {
@@ -205,13 +382,11 @@ export async function oauthAuthorize(req, res) {
     }
   }
 
-  // GET without auth -> show login form.
   if (req.method !== 'POST') {
     res.setHeader('Content-Type', 'text/html');
     return res.send(renderLoginForm(q));
   }
 
-  // POST -> verify credentials, then issue code.
   const { email, password } = req.body || {};
   const user = await User.findOne({ email }).select('+password');
   if (!user || !(await user.comparePassword(password))) {
@@ -223,26 +398,27 @@ export async function oauthAuthorize(req, res) {
   }
 
   return finishAuthorize(res, user._id, {
-    client_id,
-    redirect_uri,
+    clientId,
+    redirectUri,
     state,
-    code_challenge,
+    codeChallenge,
   });
 }
 
-function finishAuthorize(res, userId, { client_id, redirect_uri, state, code_challenge }) {
+function finishAuthorize(res, userId, { clientId, redirectUri, state, codeChallenge }) {
   const code = jwt.sign(
     {
       sub: userId.toString(),
-      azp: client_id,
-      cch: code_challenge || null,
+      azp: clientId,
+      rdu: redirectUri,
+      cch: codeChallenge || null,
       typ: 'azc',
     },
     process.env.JWT_SECRET,
     { expiresIn: '5m' }
   );
   try {
-    const url = new URL(redirect_uri);
+    const url = new URL(redirectUri);
     url.searchParams.set('code', code);
     if (state) url.searchParams.set('state', state);
     return res.redirect(url.toString());
@@ -252,44 +428,30 @@ function finishAuthorize(res, userId, { client_id, redirect_uri, state, code_cha
 }
 
 export async function oauthToken(req, res) {
-  let clientId;
-  let clientSecret;
-
-  const auth = req.headers.authorization;
-  if (auth && auth.startsWith('Basic ')) {
-    const decoded = Buffer.from(auth.slice(6), 'base64').toString('utf8');
-    const idx = decoded.indexOf(':');
-    clientId = decoded.slice(0, idx);
-    clientSecret = decoded.slice(idx + 1);
-  } else {
-    clientId = req.body?.client_id;
-    clientSecret = req.body?.client_secret;
-  }
-
-  if (
-    !process.env.MCP_CLIENT_ID ||
-    !process.env.MCP_CLIENT_SECRET ||
-    clientId !== process.env.MCP_CLIENT_ID ||
-    clientSecret !== process.env.MCP_CLIENT_SECRET
-  ) {
-    return res.status(401).json({ error: 'invalid_client' });
-  }
+  const client = await authenticateOAuthClient(req);
+  if (!client) return res.status(401).json({ error: 'invalid_client' });
 
   const grantType = req.body?.grant_type;
 
-  // --- Authorization Code grant (Gemini's user-bound flow) ---
   if (grantType === 'authorization_code') {
+    if (!client.grantTypes?.includes('authorization_code')) {
+      return res.status(400).json({ error: 'unsupported_grant_type' });
+    }
+
     const code = req.body?.code;
     const verifier = req.body?.code_verifier;
+    const redirectUri = req.body?.redirect_uri;
     let cd;
     try {
       cd = jwt.verify(code, process.env.JWT_SECRET);
     } catch {
       return res.status(400).json({ error: 'invalid_grant' });
     }
-    if (cd.typ !== 'azc' || cd.azp !== clientId) {
+
+    if (cd.typ !== 'azc' || cd.azp !== client.clientId || !redirectUri || cd.rdu !== redirectUri) {
       return res.status(400).json({ error: 'invalid_grant' });
     }
+
     if (cd.cch) {
       const expected = crypto
         .createHash('sha256')
@@ -302,6 +464,7 @@ export async function oauthToken(req, res) {
         return res.status(400).json({ error: 'invalid_grant' });
       }
     }
+
     const accessToken = jwt.sign(
       { id: cd.sub, mcp: true },
       process.env.JWT_SECRET,
@@ -315,12 +478,14 @@ export async function oauthToken(req, res) {
     });
   }
 
-  // --- Client Credentials grant (fixed service user) ---
   if (grantType === 'client_credentials') {
-    const userId = process.env.MCP_OAUTH_USER_ID;
-    if (!userId) {
-      return res.status(500).json({ error: 'server_misconfigured' });
+    if (!client.static || !client.grantTypes?.includes('client_credentials')) {
+      return res.status(400).json({ error: 'unsupported_grant_type' });
     }
+
+    const userId = process.env.MCP_OAUTH_USER_ID;
+    if (!userId) return res.status(500).json({ error: 'server_misconfigured' });
+
     const accessToken = jwt.sign(
       { id: userId, mcp: true },
       process.env.JWT_SECRET,
