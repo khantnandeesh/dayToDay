@@ -340,28 +340,135 @@ export async function oauthRegister(req, res) {
 }
 
 // Authorization endpoint (Authorization Code flow with PKCE).
-function renderLoginForm(params) {
-  const hidden = Object.entries(params)
+function renderLoginForm(params, errorMessage = null, userEmail = '') {
+  const cleanParams = { ...params };
+  delete cleanParams.error;
+  delete cleanParams.email;
+  delete cleanParams.password;
+
+  const hidden = Object.entries(cleanParams)
     .map(([k, v]) => `<input type="hidden" name="${k}" value="${String(v).replace(/"/g, '&quot;')}">`)
     .join('');
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Authorize DayToDay MCP</title>
-  <style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:16px;}
-  .card{background:#1e293b;padding:32px 28px;border-radius:14px;border:1px solid #334155;box-shadow:0 8px 30px rgba(0,0,0,.4);width:100%;max-width:360px;box-sizing:border-box;}
-  h1{font-size:20px;margin:0 0 8px;font-weight:700;} p{color:#94a3b8;font-size:14px;margin:0 0 20px;line-height:1.5;}
-  input{width:100%;padding:12px 14px;margin-bottom:12px;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:8px;box-sizing:border-box;font-size:14px;}
-  input:focus{outline:none;border-color:#38bdf8;box-shadow:0 0 0 1px #38bdf8;}
-  button{width:100%;padding:12px;background:#38bdf8;color:#0f172a;border:0;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;transition:opacity 0.2s;}
-  button:hover{opacity:0.9;}
-  .muted{font-size:12px;color:#64748b;margin-top:16px;text-align:center;}</style></head>
-  <body><form class="card" method="post">
-    <h1>Connect DayToDay to AI Agent</h1>
-    <p>Sign in to grant Claude, Gemini, Cursor, or your AI client access to your DayToDay account.</p>
-    ${hidden}
-    <input name="email" type="email" placeholder="Email" autocomplete="username" required>
-    <input name="password" type="password" placeholder="Password" autocomplete="current-password" required>
-    <button type="submit">Authorize Connection</button>
+
+  const errorHtml = errorMessage
+    ? `<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:16px;line-height:1.4;">${errorMessage}</div>`
+    : '';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Authorize DayToDay MCP</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      display: flex;
+      min-height: 100vh;
+      align-items: center;
+      justify-content: center;
+      margin: 0;
+      padding: 16px;
+    }
+    .card {
+      background: #1e293b;
+      padding: 32px 28px;
+      border-radius: 14px;
+      border: 1px solid #334155;
+      box-shadow: 0 12px 40px rgba(0,0,0,.5);
+      width: 100%;
+      max-width: 380px;
+    }
+    .brand-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: 9999px;
+      color: #38bdf8;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    h1 { font-size: 20px; margin: 0 0 8px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }
+    p { color: #94a3b8; font-size: 13.5px; margin: 0 0 20px; line-height: 1.5; }
+    label { display: block; font-size: 12px; font-weight: 600; color: #cbd5e1; margin-bottom: 6px; }
+    input[type="email"], input[type="password"] {
+      width: 100%;
+      padding: 12px 14px;
+      margin-bottom: 16px;
+      background: #0f172a;
+      color: #f8fafc;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    input:focus {
+      outline: none;
+      border-color: #38bdf8;
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+    }
+    button {
+      width: 100%;
+      padding: 13px;
+      background: #38bdf8;
+      color: #0f172a;
+      border: 0;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.15s ease-in-out;
+      margin-top: 4px;
+    }
+    button:hover { background: #7dd3fc; }
+    button:active { transform: scale(0.99); }
+    .muted {
+      font-size: 12px;
+      color: #64748b;
+      margin-top: 20px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand-badge">⚡ MCP Connected App</div>
+    <h1>Connect DayToDay</h1>
+    <p>Sign in to grant your AI client (Claude, Gemini, Cursor) secure access to your DayToDay vault & drive.</p>
+    ${errorHtml}
+    <form method="post" id="authForm">
+      ${hidden}
+      <div>
+        <label for="email">Account Email</label>
+        <input id="email" name="email" type="email" placeholder="name@example.com" value="${String(userEmail || '').replace(/"/g, '&quot;')}" autocomplete="username" required autofocus>
+      </div>
+      <div>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" id="submitBtn">Authorize Connection &rarr;</button>
+    </form>
     <div class="muted">DayToDay Cloud &bull; Model Context Protocol</div>
-  </form></body></html>`;
+  </div>
+  <script>
+    document.getElementById('authForm').addEventListener('submit', function() {
+      var btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.textContent = 'Authorizing & Redirecting...';
+      btn.style.opacity = '0.7';
+    });
+  </script>
+</body>
+</html>`;
 }
 
 export async function oauthAuthorize(req, res) {
@@ -424,14 +531,23 @@ export async function oauthAuthorize(req, res) {
     return res.send(renderLoginForm(q));
   }
 
-  const { email, password } = req.body || {};
-  const user = await User.findOne({ email }).select('+password');
+  const rawEmail = (req.body?.email || '').trim().toLowerCase();
+  const password = req.body?.password || '';
+
+  if (!rawEmail || !password) {
+    res.status(400).setHeader('Content-Type', 'text/html');
+    return res.send(renderLoginForm(q, 'Please provide both email and password.', rawEmail));
+  }
+
+  const user = await User.findOne({ email: rawEmail }).select('+password');
   if (!user || !(await user.comparePassword(password))) {
     res.status(401).setHeader('Content-Type', 'text/html');
-    return res.send(
-      renderLoginForm({ ...q, error: '1' }) +
-        '<p style="color:#ef4444;font-size:13px;text-align:center;margin-top:12px;">Invalid email or password.</p>'
-    );
+    return res.send(renderLoginForm(q, 'Invalid email or password. Please verify your credentials and try again.', rawEmail));
+  }
+
+  if (!user.isActive) {
+    res.status(403).setHeader('Content-Type', 'text/html');
+    return res.send(renderLoginForm(q, 'Your account is deactivated. Please contact support.', rawEmail));
   }
 
   return finishAuthorize(res, user._id, {
@@ -458,7 +574,29 @@ function finishAuthorize(res, userId, { clientId, redirectUri, state, codeChalle
     const url = new URL(redirectUri);
     url.searchParams.set('code', code);
     if (state) url.searchParams.set('state', state);
-    return res.redirect(url.toString());
+    const targetUrl = url.toString();
+
+    res.status(303);
+    res.setHeader('Location', targetUrl);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Authorizing...</title>
+  <meta http-equiv="refresh" content="0;url=${targetUrl.replace(/"/g, '&quot;')}">
+  <script>window.location.replace(${JSON.stringify(targetUrl)});</script>
+</head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#f8fafc;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:16px;">
+  <div style="background:#1e293b;padding:32px 28px;border-radius:14px;border:1px solid #334155;max-width:380px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+    <div style="font-size:32px;margin-bottom:12px;">✅</div>
+    <h1 style="font-size:18px;margin:0 0 8px;font-weight:700;color:#ffffff;">Authorization Successful</h1>
+    <p style="color:#94a3b8;font-size:13.5px;margin:0 0 20px;line-height:1.5;">Redirecting back to your AI client...</p>
+    <a href="${targetUrl.replace(/"/g, '&quot;')}" style="display:inline-block;padding:10px 16px;background:#38bdf8;color:#0f172a;text-decoration:none;border-radius:8px;font-size:13px;font-weight:700;">Click if not redirected automatically &rarr;</a>
+  </div>
+</body>
+</html>`);
   } catch {
     return res.status(400).json({ error: 'invalid_redirect_uri' });
   }
