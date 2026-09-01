@@ -6,10 +6,9 @@
     "dev": "npm --prefix frontend run dev",
     "lint": "npm --prefix frontend run lint",
     "start": "node backend/index.js",
-    "build": "cd frontend && npm run build",
-    "heroku-postbuild": "npm --prefix frontend run build",
-    "test:mcp": "node backend/tests/mcp-compatibility.mjs",
-    "postinstall": "cd backend && npm install"
+    "build": "node -e 'console.log(\"Backend build complete\")'",
+    "heroku-postbuild": "node -e 'console.log(\"Backend ready\")'",
+    "test:mcp": "node backend/tests/mcp-compatibility.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.946.0",
