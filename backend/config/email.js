@@ -320,6 +320,133 @@ export const sendLoginAlert = async (email, userName, deviceInfo) => {
 };
 
 // ------------------------------------------------------
+//  SEND DECRYPTED VAULT CREDENTIALS DIRECTLY TO EMAIL
+// ------------------------------------------------------
+export const sendVaultCredentialsEmail = async ({
+  email,
+  userName,
+  itemTitle,
+  itemType,
+  credentials = {},
+}) => {
+  const displayTitle = itemTitle || credentials.title || "Secure Vault Item";
+  const displayType = itemType || credentials.type || "login";
+
+  const username = credentials.username || credentials.login || "";
+  const password = credentials.password || "";
+  const url = credentials.url || credentials.website || "";
+  const notes = credentials.notes || "";
+  const fields = Array.isArray(credentials.fields) ? credentials.fields : [];
+  const cardholderName = credentials.cardholderName || "";
+  const cardNumber = credentials.cardNumber || "";
+  const expiryDate = credentials.expiryDate || "";
+  const cvv = credentials.cvv || "";
+
+  let fieldsHtml = "";
+
+  if (username) {
+    fieldsHtml += `
+      <div style="margin-bottom:14px;padding:12px 16px;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:8px;">
+        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Username / Login</div>
+        <div style="font-family:'SF Mono', 'Menlo', 'Consolas', monospace;font-size:15px;color:#0f172a;word-break:break-all;font-weight:600;">${username}</div>
+      </div>
+    `;
+  }
+
+  if (password) {
+    fieldsHtml += `
+      <div style="margin-bottom:14px;padding:12px 16px;background-color:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:8px;">
+        <div style="font-size:11px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">🔑 Password / Secret</div>
+        <div style="font-family:'SF Mono', 'Menlo', 'Consolas', monospace;font-size:17px;color:#14532d;word-break:break-all;font-weight:700;letter-spacing:0.5px;">${password}</div>
+      </div>
+    `;
+  }
+
+  if (url) {
+    fieldsHtml += `
+      <div style="margin-bottom:14px;padding:12px 16px;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:8px;">
+        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Website URL</div>
+        <div style="font-size:14px;color:#0284c7;word-break:break-all;"><a href="${url.startsWith('http') ? url : 'https://' + url}" style="color:#0284c7;text-decoration:none;">${url}</a></div>
+      </div>
+    `;
+  }
+
+  if (cardNumber) {
+    fieldsHtml += `
+      <div style="margin-bottom:14px;padding:12px 16px;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:8px;">
+        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Card Number</div>
+        <div style="font-family:'SF Mono', 'Menlo', monospace;font-size:15px;color:#0f172a;font-weight:600;">${cardNumber}</div>
+        ${(expiryDate || cvv) ? `<div style="font-size:12px;color:#64748b;margin-top:6px;">Exp: ${expiryDate || 'N/A'} | CVV: ${cvv || 'N/A'}</div>` : ''}
+      </div>
+    `;
+  }
+
+  if (notes) {
+    fieldsHtml += `
+      <div style="margin-bottom:14px;padding:12px 16px;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:8px;">
+        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Secure Notes</div>
+        <div style="font-size:13px;color:#334155;white-space:pre-wrap;line-height:1.5;">${notes}</div>
+      </div>
+    `;
+  }
+
+  if (fields.length > 0) {
+    fields.forEach((f) => {
+      fieldsHtml += `
+        <div style="margin-bottom:10px;padding:10px 14px;background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+          <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;">${f.label || 'Field'}</div>
+          <div style="font-family:'SF Mono', 'Menlo', monospace;font-size:14px;color:#0f172a;">${f.value}</div>
+        </div>
+      `;
+    });
+  }
+
+  const content = `
+    <h1 style="margin:0 0 16px 0;font-size:22px;font-weight:700;color:#0f172a;letter-spacing:-0.5px;">🔐 Your Requested Vault Credentials</h1>
+    
+    <p style="margin:0 0 16px 0;font-size:14px;color:#334155;line-height:1.6;">
+      Hello ${userName || "there"}, you clicked a secure link to access credentials for <strong>${displayTitle}</strong>. Here are your decrypted values:
+    </p>
+
+    <div style="margin:20px 0;padding:18px;background-color:#f8fafc;border:1px solid #cbd5e1;border-radius:12px;">
+      <div style="font-size:17px;font-weight:700;color:#0f172a;margin-bottom:14px;display:flex;align-items:center;">
+        📦 ${displayTitle} <span style="font-size:12px;font-weight:normal;color:#64748b;margin-left:8px;text-transform:capitalize;">(${displayType})</span>
+      </div>
+
+      ${fieldsHtml}
+    </div>
+
+    <div style="margin:20px 0;padding:12px 16px;background-color:#fffbeb;border:1px solid #fef3c7;border-left:4px solid #f59e0b;border-radius:8px;">
+      <div style="font-size:12px;color:#92400e;line-height:1.5;">
+        🔥 <strong>One-Time Burn:</strong> The secure link you clicked has been burned and cannot be accessed again.
+      </div>
+    </div>
+
+    <p style="margin:12px 0 0 0;font-size:12px;color:#94a3b8;">
+      If you did not initiate this request, please log in to DayToDay and update your master security credentials.
+    </p>
+  `;
+
+  const html = wrapHtml(content, `Credentials: ${displayTitle}`);
+  const subject = `🔐 Credentials for ${displayTitle} - DayToDay Vault`;
+  const text = `Hello ${userName || "there"},\n\nHere are your requested credentials for "${displayTitle}":\n\n` +
+    (username ? `Username: ${username}\n` : '') +
+    (password ? `Password: ${password}\n` : '') +
+    (url ? `URL: ${url}\n` : '') +
+    (notes ? `Notes: ${notes}\n` : '') +
+    `\nThe one-time link has now been burned.`;
+
+  console.log(`🔐 [VAULT CREDS DISPATCH] Sending decrypted credentials for "${displayTitle}" -> ${email}`);
+  return await sendMailResilient({
+    to: email,
+    subject,
+    html,
+    text,
+    fromTitle: "DayToDay Vault Security",
+  });
+};
+
+// ------------------------------------------------------
 //  SEND ONE-TIME VAULT ACCESS CODE EMAIL
 // ------------------------------------------------------
 export const sendVaultAccessEmail = async ({ email, code, userName, itemTitle, itemType, expiresMinutes = 10 }) => {
@@ -388,6 +515,7 @@ export default {
   sendWelcomeEmail,
   sendLoginAlert,
   sendVaultAccessEmail,
+  sendVaultCredentialsEmail,
   checkEmailProviders,
 };
 

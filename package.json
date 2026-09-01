@@ -6,7 +6,7 @@
     "dev": "npm --prefix frontend run dev",
     "lint": "npm --prefix frontend run lint",
     "start": "node backend/index.js",
-    "build": "cd frontend && npm install --include=dev && npm run build",
+    "build": "cd frontend && npm run build",
     "test:mcp": "node backend/tests/mcp-compatibility.mjs",
     "postinstall": "cd backend && npm install"
   }

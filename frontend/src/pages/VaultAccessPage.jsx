@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { 
-    Shield, Key, Lock, Unlock, Eye, EyeOff, Copy, Check, 
-    AlertCircle, CheckCircle2, Clock, Mail, ExternalLink, 
-    RefreshCw, Loader, Flame, ArrowRight, ShieldCheck, Globe, User, FileText, CreditCard
+    Shield, Key, Lock, CheckCircle2, Clock, Mail, 
+    RefreshCw, Loader, Flame, ArrowRight, ShieldCheck, 
+    CreditCard, FileText, Send, Sparkles
 } from 'lucide-react';
 import api from '../config/api';
 
@@ -15,28 +15,20 @@ const VaultAccessPage = () => {
     const [error, setError] = useState(null);
     const [linkInfo, setLinkInfo] = useState(null);
     
-    // Verification state
-    const [code, setCode] = useState('');
-    const [verifying, setVerifying] = useState(false);
-    const [verifyError, setVerifyError] = useState('');
-    
     // Resend state
     const [resending, setResending] = useState(false);
     const [resendSuccess, setResendSuccess] = useState('');
+    const [resendError, setResendError] = useState('');
     const [resendCooldown, setResendCooldown] = useState(0);
 
-    // Decrypted credential state
-    const [decryptedItem, setDecryptedItem] = useState(null);
-    const [showPassword, setShowPassword] = useState(false);
-    const [copiedField, setCopiedField] = useState(null);
     const [timeLeft, setTimeLeft] = useState(null);
 
-    // Fetch initial link metadata & trigger email code
+    // Fetch initial link metadata & trigger instant credentials email dispatch
     useEffect(() => {
         let isMounted = true;
         if (!token) return;
 
-        const loadLink = async () => {
+        const loadLinkAndSendCreds = async () => {
             try {
                 const res = await api.get(`/vault/access-link/${token}`);
                 if (!isMounted) return;
@@ -48,7 +40,7 @@ const VaultAccessPage = () => {
             } catch (err) {
                 if (!isMounted) return;
                 console.error('Fetch access link error:', err);
-                const msg = err.response?.data?.message || 'This secure link is invalid, expired, or was already burned.';
+                const msg = err.response?.data?.message || 'This secure link is invalid, expired, or was already opened and burned.';
                 setError(msg);
             } finally {
                 if (isMounted) {
@@ -57,7 +49,7 @@ const VaultAccessPage = () => {
             }
         };
 
-        loadLink();
+        loadLinkAndSendCreds();
         return () => {
             isMounted = false;
         };
@@ -95,67 +87,34 @@ const VaultAccessPage = () => {
         return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     };
 
-    // Handle code verification
-    const handleVerify = async (e) => {
-        if (e) e.preventDefault();
-        setVerifyError('');
-        if (!code || code.trim().length < 6) {
-            setVerifyError('Please enter the complete 6-digit verification code');
-            return;
-        }
-
-        setVerifying(true);
-        try {
-            const res = await api.post(`/vault/access-link/${token}/verify`, { code: code.trim() });
-            if (res.data.success && res.data.item) {
-                setDecryptedItem(res.data.item);
-            } else {
-                setVerifyError(res.data.message || 'Verification failed');
-            }
-        } catch (err) {
-            console.error('Verify error:', err);
-            setVerifyError(err.response?.data?.message || 'Invalid or expired verification code');
-        } finally {
-            setVerifying(false);
-        }
-    };
-
-    // Handle resend code
-    const handleResendCode = async () => {
+    // Handle resend email
+    const handleResend = async () => {
         if (resendCooldown > 0 || resending) return;
         setResending(true);
         setResendSuccess('');
-        setVerifyError('');
+        setResendError('');
         try {
             const res = await api.post(`/vault/access-link/${token}/resend`);
-            setResendSuccess(res.data.message || 'New verification code sent to your email.');
+            setResendSuccess(res.data.message || 'Credentials email has been resent to your registered email.');
             setResendCooldown(30); // 30s cooldown
         } catch (err) {
             console.error('Resend error:', err);
-            setVerifyError(err.response?.data?.message || 'Failed to resend code');
+            setResendError(err.response?.data?.message || 'Failed to resend credentials email');
         } finally {
             setResending(false);
         }
     };
 
-    // Copy to clipboard helper
-    const handleCopy = (text, fieldName) => {
-        if (!text) return;
-        navigator.clipboard.writeText(text);
-        setCopiedField(fieldName);
-        setTimeout(() => setCopiedField(null), 2000);
-    };
-
     const getItemIcon = (type) => {
         switch (type?.toLowerCase()) {
             case 'login':
-                return <Key className="w-6 h-6 text-blue-500" />;
+                return <Key className="w-7 h-7 text-blue-400" />;
             case 'card':
-                return <CreditCard className="w-6 h-6 text-emerald-500" />;
+                return <CreditCard className="w-7 h-7 text-emerald-400" />;
             case 'note':
-                return <FileText className="w-6 h-6 text-amber-500" />;
+                return <FileText className="w-7 h-7 text-amber-400" />;
             default:
-                return <Lock className="w-6 h-6 text-slate-500" />;
+                return <Lock className="w-7 h-7 text-blue-400" />;
         }
     };
 
@@ -167,7 +126,7 @@ const VaultAccessPage = () => {
                     <Loader className="w-8 h-8 text-blue-400 animate-spin" />
                 </div>
                 <h2 className="text-lg font-semibold text-slate-200">Verifying Secure Vault Link...</h2>
-                <p className="text-slate-500 text-sm mt-1">Connecting to DayToDay Zero-Knowledge Vault</p>
+                <p className="text-slate-500 text-sm mt-1">Decrypting and sending credentials to your email</p>
             </div>
         );
     }
@@ -187,7 +146,7 @@ const VaultAccessPage = () => {
                     <div className="p-4 bg-slate-950/60 border border-slate-800/80 rounded-2xl mb-6 text-left flex items-start gap-3">
                         <Shield className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
                         <div className="text-xs text-slate-400 leading-normal">
-                            DayToDay secure links are single-use and time-bounded to prevent unauthorized snooping or credential leakage.
+                            DayToDay secure links are single-use and time-bounded to prevent unauthorized credential snooping.
                         </div>
                     </div>
                     <Link
@@ -224,280 +183,99 @@ const VaultAccessPage = () => {
 
             {/* Main Content Area */}
             <div className="w-full max-w-lg mx-auto my-auto py-6">
-                {!decryptedItem ? (
-                    /* STEP 1: VERIFY CODE */
-                    <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
-                        <div className="text-center mb-6">
-                            <div className="w-16 h-16 bg-blue-500/10 border border-blue-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4 text-blue-400 shadow-inner">
-                                <Lock className="w-8 h-8" />
-                            </div>
-                            <h1 className="text-2xl font-bold text-white tracking-tight mb-1">
-                                {linkInfo?.title || 'Secure Vault Access'}
-                            </h1>
-                            <p className="text-sm text-slate-400">
-                                This credential is protected with one-time 2FA authorization.
-                            </p>
-                        </div>
-
-                        {/* Email Dispatch Notice */}
-                        <div className="p-4 bg-blue-950/40 border border-blue-800/40 rounded-2xl mb-6 flex items-start gap-3.5">
-                            <div className="w-9 h-9 bg-blue-600/20 rounded-xl flex items-center justify-center shrink-0 text-blue-400 mt-0.5">
-                                <Mail className="w-5 h-5" />
-                            </div>
-                            <div className="text-xs text-slate-300 leading-relaxed">
-                                A 6-digit access code was automatically sent to the account owner at{' '}
-                                <strong className="text-blue-300 font-semibold">{linkInfo?.maskedEmail || 'your registered email'}</strong>.
+                <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
+                    {/* Success Icon & Header */}
+                    <div className="text-center mb-6">
+                        <div className="w-20 h-20 bg-blue-500/10 border border-blue-500/25 rounded-3xl flex items-center justify-center mx-auto mb-4 text-blue-400 shadow-xl relative">
+                            <Send className="w-9 h-9 text-blue-400 animate-pulse" />
+                            <div className="absolute -bottom-1 -right-1 w-7 h-7 bg-emerald-500 rounded-full flex items-center justify-center border-2 border-slate-900 text-white shadow-md">
+                                <CheckCircle2 className="w-4 h-4" />
                             </div>
                         </div>
-
-                        {verifyError && (
-                            <div className="mb-5 p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-start gap-3 text-rose-300 text-sm">
-                                <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-                                <span>{verifyError}</span>
-                            </div>
-                        )}
-
-                        {resendSuccess && (
-                            <div className="mb-5 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-start gap-3 text-emerald-300 text-sm">
-                                <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                                <span>{resendSuccess}</span>
-                            </div>
-                        )}
-
-                        <form onSubmit={handleVerify} className="space-y-5">
-                            <div>
-                                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                                    Enter 6-Digit Email Code
-                                </label>
-                                <input
-                                    type="text"
-                                    maxLength={6}
-                                    value={code}
-                                    onChange={(e) => {
-                                        setCode(e.target.value.replace(/\D/g, ''));
-                                        setVerifyError('');
-                                    }}
-                                    placeholder="••••••"
-                                    autoFocus
-                                    className="w-full text-center tracking-[0.6em] font-mono text-2xl py-3.5 px-4 bg-slate-950 border border-slate-700/80 rounded-2xl text-white placeholder:text-slate-600 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/20 transition-all"
-                                />
-                            </div>
-
-                            <button
-                                type="submit"
-                                disabled={verifying || code.length < 6 || (timeLeft !== null && timeLeft <= 0)}
-                                className="w-full py-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-2xl shadow-lg shadow-blue-600/30 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
-                            >
-                                {verifying ? (
-                                    <>
-                                        <Loader className="w-5 h-5 animate-spin" />
-                                        Verifying Code...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Unlock className="w-5 h-5" />
-                                        Decrypt & Reveal Credential
-                                    </>
-                                )}
-                            </button>
-                        </form>
-
-                        <div className="mt-6 pt-6 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
-                            <span>Didn't receive the email?</span>
-                            <button
-                                type="button"
-                                onClick={handleResendCode}
-                                disabled={resendCooldown > 0 || resending}
-                                className="text-blue-400 hover:text-blue-300 font-medium disabled:text-slate-600 transition-colors flex items-center gap-1.5"
-                            >
-                                <RefreshCw className={`w-3.5 h-3.5 ${resending ? 'animate-spin' : ''}`} />
-                                {resendCooldown > 0 ? `Resend code (${resendCooldown}s)` : 'Resend code'}
-                            </button>
-                        </div>
+                        <h1 className="text-2xl font-bold text-white tracking-tight mb-1">
+                            Credentials Sent to Your Email!
+                        </h1>
+                        <p className="text-sm text-slate-400">
+                            The requested vault form values have been dispatched securely.
+                        </p>
                     </div>
-                ) : (
-                    /* STEP 2: REVEALED DECRYPTED CREDENTIALS */
-                    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl animate-in fade-in zoom-in-95 duration-300">
-                        {/* Header & Burn notification */}
-                        <div className="flex items-center justify-between mb-6 pb-6 border-b border-slate-800">
+
+                    {/* Item Information Card */}
+                    <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl mb-6">
+                        <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3.5">
-                                <div className="w-12 h-12 bg-slate-800 rounded-2xl flex items-center justify-center border border-slate-700">
-                                    {getItemIcon(decryptedItem.type)}
+                                <div className="w-12 h-12 bg-slate-900 rounded-xl flex items-center justify-center border border-slate-800 shadow-inner">
+                                    {getItemIcon(linkInfo?.itemType)}
                                 </div>
                                 <div>
-                                    <h1 className="text-xl font-bold text-white leading-tight">
-                                        {decryptedItem.title || 'Decrypted Item'}
-                                    </h1>
-                                    <span className="text-xs text-emerald-400 font-medium flex items-center gap-1 mt-0.5">
-                                        <CheckCircle2 className="w-3.5 h-3.5" /> Decrypted & Verified
-                                    </span>
+                                    <div className="text-base font-bold text-slate-100">
+                                        {linkInfo?.title || 'Secure Vault Item'}
+                                    </div>
+                                    <div className="text-xs text-slate-400 capitalize mt-0.5">
+                                        Type: {linkInfo?.itemType || 'Login'} &bull; Form Values Dispatched
+                                    </div>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-1.5 px-3 py-1 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-full text-xs font-medium">
+                            <div className="flex items-center gap-1.5 px-3 py-1 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-full text-xs font-medium shrink-0">
                                 <Flame className="w-3.5 h-3.5" />
-                                <span>Link Burned</span>
+                                <span>Burned</span>
                             </div>
-                        </div>
-
-                        <div className="space-y-4">
-                            {/* Username / Login Field */}
-                            {decryptedItem.username && (
-                                <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
-                                    <div className="flex items-center justify-between text-xs text-slate-400 mb-1.5">
-                                        <span className="flex items-center gap-1.5 font-medium uppercase tracking-wider">
-                                            <User className="w-3.5 h-3.5 text-slate-500" /> Username / Email
-                                        </span>
-                                        <button
-                                            onClick={() => handleCopy(decryptedItem.username, 'username')}
-                                            className="text-blue-400 hover:text-blue-300 flex items-center gap-1 font-semibold text-xs transition-colors"
-                                        >
-                                            {copiedField === 'username' ? (
-                                                <>
-                                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                                    <span className="text-emerald-400">Copied</span>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <Copy className="w-3.5 h-3.5" />
-                                                    Copy
-                                                </>
-                                            )}
-                                        </button>
-                                    </div>
-                                    <div className="text-base font-mono text-slate-100 select-all break-all">
-                                        {decryptedItem.username}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Password Field */}
-                            {decryptedItem.password && (
-                                <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
-                                    <div className="flex items-center justify-between text-xs text-slate-400 mb-1.5">
-                                        <span className="flex items-center gap-1.5 font-medium uppercase tracking-wider">
-                                            <Key className="w-3.5 h-3.5 text-slate-500" /> Password
-                                        </span>
-                                        <div className="flex items-center gap-3">
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowPassword(!showPassword)}
-                                                className="text-slate-400 hover:text-slate-300 flex items-center gap-1 text-xs transition-colors"
-                                            >
-                                                {showPassword ? (
-                                                    <>
-                                                        <EyeOff className="w-3.5 h-3.5" />
-                                                        Hide
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <Eye className="w-3.5 h-3.5" />
-                                                        Show
-                                                    </>
-                                                )}
-                                            </button>
-                                            <button
-                                                onClick={() => handleCopy(decryptedItem.password, 'password')}
-                                                className="text-blue-400 hover:text-blue-300 flex items-center gap-1 font-semibold text-xs transition-colors"
-                                            >
-                                                {copiedField === 'password' ? (
-                                                    <>
-                                                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                                        <span className="text-emerald-400">Copied</span>
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <Copy className="w-3.5 h-3.5" />
-                                                        Copy
-                                                    </>
-                                                )}
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div className="text-lg font-mono text-slate-100 select-all break-all tracking-wide">
-                                        {showPassword ? decryptedItem.password : '••••••••••••••••'}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Website / URL */}
-                            {decryptedItem.url && (
-                                <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl flex items-center justify-between">
-                                    <div className="flex items-center gap-2 overflow-hidden mr-3">
-                                        <Globe className="w-4 h-4 text-slate-500 shrink-0" />
-                                        <span className="text-sm font-mono text-slate-300 truncate">
-                                            {decryptedItem.url}
-                                        </span>
-                                    </div>
-                                    <a
-                                        href={decryptedItem.url.startsWith('http') ? decryptedItem.url : `https://${decryptedItem.url}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition-colors shrink-0"
-                                        title="Open Website"
-                                    >
-                                        <ExternalLink className="w-4 h-4" />
-                                    </a>
-                                </div>
-                            )}
-
-                            {/* Card Specific Fields */}
-                            {decryptedItem.cardNumber && (
-                                <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
-                                    <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                                        <span>CARD NUMBER</span>
-                                        <button
-                                            onClick={() => handleCopy(decryptedItem.cardNumber, 'card')}
-                                            className="text-blue-400 hover:text-blue-300 text-xs flex items-center gap-1"
-                                        >
-                                            <Copy className="w-3 h-3" /> Copy
-                                        </button>
-                                    </div>
-                                    <div className="font-mono text-base text-slate-100">
-                                        {decryptedItem.cardNumber}
-                                    </div>
-                                    {(decryptedItem.expiryDate || decryptedItem.cvv) && (
-                                        <div className="flex gap-4 mt-3 pt-3 border-t border-slate-900 text-xs text-slate-400">
-                                            {decryptedItem.expiryDate && <div>EXP: <span className="text-slate-200 font-mono">{decryptedItem.expiryDate}</span></div>}
-                                            {decryptedItem.cvv && <div>CVV: <span className="text-slate-200 font-mono">{decryptedItem.cvv}</span></div>}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-
-                            {/* Notes Field */}
-                            {decryptedItem.notes && (
-                                <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-2xl">
-                                    <div className="text-xs text-slate-400 uppercase tracking-wider mb-2 font-medium">
-                                        Secure Notes
-                                    </div>
-                                    <div className="text-sm text-slate-300 whitespace-pre-wrap font-sans leading-relaxed">
-                                        {decryptedItem.notes}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Custom Fields */}
-                            {Array.isArray(decryptedItem.fields) && decryptedItem.fields.length > 0 && (
-                                <div className="space-y-2 pt-2">
-                                    {decryptedItem.fields.map((f, idx) => (
-                                        <div key={idx} className="p-3 bg-slate-950/60 border border-slate-850 rounded-xl flex items-center justify-between">
-                                            <span className="text-xs text-slate-400">{f.label || `Field ${idx + 1}`}</span>
-                                            <span className="text-sm font-mono text-slate-200">{f.value}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Safety notice */}
-                        <div className="mt-6 p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-xs text-amber-300/90 leading-relaxed flex items-start gap-2.5">
-                            <Shield className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                            <span>
-                                <strong>Zero-Knowledge Protected:</strong> This single-use link has expired and is now burned. Ensure you have copied your credentials before closing this tab.
-                            </span>
                         </div>
                     </div>
-                )}
+
+                    {/* Recipient Email Callout */}
+                    <div className="p-4 bg-blue-950/40 border border-blue-800/40 rounded-2xl mb-6 flex items-start gap-3.5">
+                        <div className="w-9 h-9 bg-blue-600/20 rounded-xl flex items-center justify-center shrink-0 text-blue-400 mt-0.5">
+                            <Mail className="w-5 h-5" />
+                        </div>
+                        <div className="text-xs text-slate-300 leading-relaxed">
+                            Full login details (Username, Password, URL, Notes) were sent to the account owner at{' '}
+                            <strong className="text-blue-300 font-semibold">{linkInfo?.maskedEmail || 'your registered email'}</strong>.
+                        </div>
+                    </div>
+
+                    {resendSuccess && (
+                        <div className="mb-5 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-start gap-3 text-emerald-300 text-sm">
+                            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                            <span>{resendSuccess}</span>
+                        </div>
+                    )}
+
+                    {resendError && (
+                        <div className="mb-5 p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-start gap-3 text-rose-300 text-sm">
+                            <Shield className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                            <span>{resendError}</span>
+                        </div>
+                    )}
+
+                    {/* Resend Action */}
+                    <div className="space-y-3">
+                        <button
+                            type="button"
+                            onClick={handleResend}
+                            disabled={resendCooldown > 0 || resending}
+                            className="w-full py-3.5 px-4 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-medium rounded-2xl border border-slate-700 transition-all flex items-center justify-center gap-2 text-sm"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${resending ? 'animate-spin' : ''}`} />
+                            {resendCooldown > 0 ? `Resend email in ${resendCooldown}s` : 'Resend credentials to my email'}
+                        </button>
+
+                        <Link
+                            to="/login"
+                            className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-2xl shadow-lg shadow-blue-600/30 transition-all flex items-center justify-center gap-2 text-sm text-center"
+                        >
+                            Open DayToDay App <ArrowRight className="w-4 h-4" />
+                        </Link>
+                    </div>
+
+                    {/* Security Footnote */}
+                    <div className="mt-6 pt-5 border-t border-slate-800/80 flex items-start gap-2.5 text-xs text-slate-500">
+                        <Sparkles className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
+                        <span className="leading-relaxed">
+                            No login or master password input is required on this page. This single-use link has been burned and will self-destruct.
+                        </span>
+                    </div>
+                </div>
             </div>
 
             {/* Footer */}

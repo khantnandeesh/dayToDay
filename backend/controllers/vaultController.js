@@ -5,7 +5,7 @@ import VaultItem from '../models/VaultItem.js';
 import AIVaultSession from '../models/AIVaultSession.js';
 import VaultAccessLink from '../models/VaultAccessLink.js';
 import VaultAuditLog from '../models/VaultAuditLog.js';
-import { sendVaultAccessEmail } from '../config/email.js';
+import { sendVaultAccessEmail, sendVaultCredentialsEmail } from '../config/email.js';
 import {
   setMcpVaultSession,
   getMcpVaultSession,
@@ -589,9 +589,9 @@ export const createVaultAccessLink = async (req, res) => {
   }
 };
 
-// @desc    Access vault item via secure link - Step 1: Initial link load & trigger email OTP
+// @desc    Access vault item via secure link - Automatically dispatches credentials directly to user's registered email
 // @route   GET /api/vault/access-link/:token
-// @access  Public (token-gated)
+// @access  Public (token-gated, no login required)
 export const accessVaultViaLink = async (req, res) => {
   try {
     const { token } = req.params;
@@ -610,33 +610,12 @@ export const accessVaultViaLink = async (req, res) => {
     }
 
     if (link.usedAt && link.oneTimeUse) {
-      return res.status(410).json({ success: false, message: 'This one-time link has already been used and burned' });
+      return res.status(410).json({ success: false, message: 'This one-time link has already been opened and burned' });
     }
 
     const user = await User.findById(link.user);
     if (!user) {
       return res.status(404).json({ success: false, message: 'Owner account not found' });
-    }
-
-    // Generate 6-digit access code for email verification
-    const accessCode = Math.floor(100000 + Math.random() * 900000).toString();
-    link.accessCode = accessCode;
-    link.accessCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes code validity
-    await link.save();
-
-    // Send email with 6-digit access code to vault owner
-    const remainingMins = Math.max(1, Math.round((new Date(link.expiresAt).getTime() - Date.now()) / (60 * 1000)));
-    try {
-      await sendVaultAccessEmail({
-        email: user.email,
-        code: accessCode,
-        userName: user.name || 'DayToDay User',
-        itemTitle: link.itemTitle || 'Protected Vault Item',
-        itemType: link.itemType || 'Credentials',
-        expiresMinutes: remainingMins,
-      });
-    } catch (emailErr) {
-      console.warn('⚠️ Error triggering access code email:', emailErr.message);
     }
 
     // Mask user email for privacy (e.g. n***5@gmail.com)
@@ -653,24 +632,69 @@ export const accessVaultViaLink = async (req, res) => {
       }
     }
 
-    // Audit log link visit
+    const payload = link.decryptedSnapshot || {};
+
+    // Normalize output fields
+    let title = link.itemTitle || payload.title || 'Protected Item';
+    let type = link.itemType || payload.type || 'login';
+    let username = payload.username || payload.login || '';
+    let password = payload.password || '';
+    let url = payload.url || payload.website || '';
+    let notes = payload.notes || '';
+    let fields = Array.isArray(payload.fields) ? payload.fields : [];
+
+    // Dispatch decrypted credentials directly to the user's email
+    let emailSent = false;
+    try {
+      await sendVaultCredentialsEmail({
+        email: user.email,
+        userName: user.name || 'DayToDay User',
+        itemTitle: title,
+        itemType: type,
+        credentials: {
+          title,
+          type,
+          username,
+          password,
+          url,
+          notes,
+          fields,
+          cardholderName: payload.cardholderName || '',
+          cardNumber: payload.cardNumber || '',
+          expiryDate: payload.expiryDate || '',
+          cvv: payload.cvv || '',
+        },
+      });
+      emailSent = true;
+    } catch (emailErr) {
+      console.warn('⚠️ Error sending credentials email:', emailErr.message);
+    }
+
+    // Burn link if one-time use
+    if (link.oneTimeUse) {
+      link.usedAt = new Date();
+      await link.save();
+    }
+
+    // Audit log link visit and email dispatch
     await VaultAuditLog.create({
       user: link.user,
-      action: 'access_link_visited',
+      action: 'access_link_creds_sent_to_email',
       vaultItemId: link.vaultItemId,
       accessLinkId: link._id,
-      details: `Secure link visited, email verification code sent to ${maskedEmail}`,
+      details: `Secure link accessed: Credentials for "${title}" sent directly to email ${maskedEmail}. Link burned: ${link.oneTimeUse}`,
     });
 
     res.status(200).json({
       success: true,
-      title: link.itemTitle || 'Protected Item',
-      itemType: link.itemType || 'login',
+      emailSent,
+      title,
+      itemType: type,
       maskedEmail,
       expiresAt: link.expiresAt,
       oneTimeUse: link.oneTimeUse,
-      emailSent: true,
-      message: `A 6-digit verification code has been sent to ${maskedEmail}`,
+      burned: Boolean(link.oneTimeUse),
+      message: `Your credentials for "${title}" have been sent directly to ${maskedEmail}`,
     });
   } catch (error) {
     console.error('Access Link error:', error);
@@ -678,9 +702,9 @@ export const accessVaultViaLink = async (req, res) => {
   }
 };
 
-// @desc    Resend 6-digit security code for vault access link
+// @desc    Resend credentials email for vault access link
 // @route   POST /api/vault/access-link/:token/resend
-// @access  Public (token-gated)
+// @access  Public (token-gated, no login required)
 export const resendVaultAccessCode = async (req, res) => {
   try {
     const { token } = req.params;
@@ -695,36 +719,29 @@ export const resendVaultAccessCode = async (req, res) => {
       return res.status(410).json({ success: false, message: 'This secure link has expired' });
     }
 
-    if (link.usedAt && link.oneTimeUse) {
-      return res.status(410).json({ success: false, message: 'This link has already been used and burned' });
-    }
-
     const user = await User.findById(link.user);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const accessCode = Math.floor(100000 + Math.random() * 900000).toString();
-    link.accessCode = accessCode;
-    link.accessCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    await link.save();
+    const payload = link.decryptedSnapshot || {};
+    let title = link.itemTitle || payload.title || 'Protected Item';
+    let type = link.itemType || payload.type || 'login';
 
-    const remainingMins = Math.max(1, Math.round((new Date(link.expiresAt).getTime() - Date.now()) / (60 * 1000)));
-    await sendVaultAccessEmail({
+    await sendVaultCredentialsEmail({
       email: user.email,
-      code: accessCode,
       userName: user.name || 'DayToDay User',
-      itemTitle: link.itemTitle || 'Protected Vault Item',
-      itemType: link.itemType || 'Credentials',
-      expiresMinutes: remainingMins,
+      itemTitle: title,
+      itemType: type,
+      credentials: payload,
     });
 
     res.status(200).json({
       success: true,
-      message: 'A new 6-digit verification code was sent to your email.',
+      message: 'Credentials email has been resent to your registered email address.',
     });
   } catch (error) {
-    console.error('Resend Code error:', error);
+    console.error('Resend Creds Email error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };
