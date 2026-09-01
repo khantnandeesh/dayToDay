@@ -698,13 +698,17 @@ export const accessVaultViaLink = async (req, res) => {
     }
 
     // Audit log link visit and email dispatch
-    await VaultAuditLog.create({
-      user: link.user,
-      action: 'access_link_creds_sent_to_email',
-      vaultItemId: link.vaultItemId,
-      accessLinkId: link._id,
-      details: `Secure link accessed: Credentials for "${title}" sent directly to email ${maskedEmail}. Link burned: ${link.oneTimeUse}`,
-    });
+    try {
+      await VaultAuditLog.create({
+        user: link.user,
+        action: 'access_link_creds_sent_to_email',
+        vaultItemId: link.vaultItemId,
+        accessLinkId: link._id,
+        details: `Secure link accessed: Credentials for "${title}" sent directly to email ${maskedEmail}. Link burned: ${link.oneTimeUse}`,
+      });
+    } catch (auditErr) {
+      console.warn('⚠️ Could not create audit log entry:', auditErr.message);
+    }
 
     res.status(200).json({
       success: true,

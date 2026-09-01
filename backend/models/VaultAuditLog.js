@@ -27,6 +27,7 @@ const vaultAuditLogSchema = new mongoose.Schema({
       'access_link_created',
       'access_link_used',
       'access_link_revoked',
+      'access_link_creds_sent_to_email',
     ],
     required: true,
   },
