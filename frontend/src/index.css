@@ -82,24 +82,76 @@
 }
 
 /* Monaco Editor IntelliSense, Suggestion, and Parameter Hints Styling */
-.monaco-editor .suggest-widget,
+.monaco-editor .suggest-widget {
+  min-width: 420px !important;
+  max-width: 700px !important;
+  min-height: 220px !important;
+  max-height: 400px !important;
+  border-radius: 8px !important;
+  border: 1px solid #cbd5e1 !important;
+  box-shadow: 0 10px 30px -4px rgba(15, 23, 42, 0.16), 0 4px 6px -2px rgba(15, 23, 42, 0.05) !important;
+  z-index: 99999 !important;
+  background-color: #ffffff !important;
+}
+
+.monaco-editor .suggest-widget .monaco-list {
+  min-width: 400px !important;
+  min-height: 180px !important;
+  max-height: 360px !important;
+}
+
+.monaco-editor .suggest-widget .monaco-list-rows {
+  min-width: 100% !important;
+}
+
+.monaco-editor .suggest-widget .monaco-list-row {
+  height: 28px !important;
+  line-height: 28px !important;
+  font-size: 13px !important;
+  display: flex !important;
+  align-items: center !important;
+  padding: 0 8px !important;
+}
+
+.monaco-editor .suggest-widget .monaco-list-row.focused {
+  background-color: #e0f2fe !important;
+  color: #0369a1 !important;
+}
+
+.monaco-editor .suggest-widget .details {
+  border-left: 1px solid #e2e8f0 !important;
+  background-color: #f8fafc !important;
+  min-width: 300px !important;
+  max-width: 480px !important;
+  padding: 10px 14px !important;
+}
+
 .monaco-editor .parameter-hints-widget,
 .monaco-editor .monaco-hover {
   border-radius: 8px !important;
-  border: 1px solid #e2e8f0 !important;
+  border: 1px solid #cbd5e1 !important;
   box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.08) !important;
   z-index: 99999 !important;
 }
 
 .monaco-editor .parameter-hints-widget {
   background-color: #ffffff !important;
+  min-width: 340px !important;
+  max-width: 640px !important;
   max-height: 280px !important;
   overflow: auto !important;
+  padding: 8px 12px !important;
+  font-size: 13px !important;
 }
 
 .monaco-editor .monaco-hover {
-  max-height: 320px !important;
+  background-color: #ffffff !important;
+  min-width: 320px !important;
+  max-width: 620px !important;
+  max-height: 340px !important;
   overflow: auto !important;
+  padding: 8px 12px !important;
+  font-size: 13px !important;
 }
 
 /* Monaco Scrollbars */

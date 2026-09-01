@@ -182,6 +182,20 @@ export class MonacoLspClient {
           name: 'workspace',
         },
       ],
+      initializationOptions: {
+        python: {
+          pythonPath: 'python3',
+          analysis: {
+            autoSearchPaths: true,
+            useLibraryCodeForTypes: true,
+            autoImportCompletions: true,
+            indexing: true,
+            packageIndexDepth: 5,
+            typeCheckingMode: 'basic',
+            diagnosticMode: 'workspace',
+          },
+        },
+      },
       capabilities: {
         workspace: {
           workspaceFolders: true,
@@ -203,6 +217,8 @@ export class MonacoLspClient {
               documentationFormat: ['markdown', 'plaintext'],
               deprecatedSupport: true,
               preselectSupport: true,
+              insertReplaceSupport: true,
+              labelDetailsSupport: true,
             },
             completionItemKind: {
               valueSet: Array.from({ length: 25 }, (_, i) => i + 1),
@@ -344,11 +360,14 @@ export class MonacoLspClient {
     if (method === 'workspace/configuration') {
       const items = params?.items || [];
       const result = items.map(() => ({
-        pythonPath: 'python',
+        pythonPath: 'python3',
         analysis: {
           typeCheckingMode: 'basic',
           autoSearchPaths: true,
           useLibraryCodeForTypes: true,
+          autoImportCompletions: true,
+          indexing: true,
+          packageIndexDepth: 5,
           diagnosticMode: 'workspace',
           inlayHints: {
             variableTypes: true,
@@ -486,7 +505,20 @@ export class MonacoLspClient {
                   ? LSP_TO_MONACO_COMPLETION_KIND[item.kind]
                   : this.monaco.languages.CompletionItemKind.Property;
 
-              let insertText = item.insertText || item.label;
+              const rawLabel = typeof item.label === 'string' ? item.label : item.label?.label || '';
+              const labelDetail = item.labelDetails?.detail || (typeof item.label === 'object' ? item.label.detail : '');
+              const labelDesc = item.labelDetails?.description || (typeof item.label === 'object' ? item.label.description : '');
+
+              const formattedLabel =
+                labelDetail || labelDesc
+                  ? {
+                      label: rawLabel,
+                      detail: labelDetail || undefined,
+                      description: labelDesc || undefined,
+                    }
+                  : rawLabel;
+
+              let insertText = item.insertText || rawLabel;
               let insertTextRules =
                 item.insertTextFormat === 2
                   ? this.monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
@@ -512,8 +544,21 @@ export class MonacoLspClient {
                 insertText = item.textEdit.newText;
               }
 
+              let additionalTextEdits = undefined;
+              if (Array.isArray(item.additionalTextEdits) && item.additionalTextEdits.length > 0) {
+                additionalTextEdits = item.additionalTextEdits.map((edit) => ({
+                  range: {
+                    startLineNumber: edit.range.start.line + 1,
+                    startColumn: edit.range.start.character + 1,
+                    endLineNumber: edit.range.end.line + 1,
+                    endColumn: edit.range.end.character + 1,
+                  },
+                  text: edit.newText,
+                }));
+              }
+
               return {
-                label: item.label,
+                label: formattedLabel,
                 kind,
                 detail: item.detail,
                 documentation: doc,
@@ -522,6 +567,7 @@ export class MonacoLspClient {
                 range,
                 sortText: item.sortText,
                 filterText: item.filterText,
+                additionalTextEdits,
               };
             });
 
