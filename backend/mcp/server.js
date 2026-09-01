@@ -3192,7 +3192,7 @@ function buildServer(ctx) {
             },
           });
 
-          const baseUrl = process.env.FRONTEND_URL || process.env.BACKEND_URL || 'http://localhost:3000';
+          const baseUrl = process.env.FRONTEND_URL || 'https://nandeesh.dev';
 
           return jsonResult({
             success: true,

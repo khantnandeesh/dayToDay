@@ -572,7 +572,7 @@ export const createVaultAccessLink = async (req, res) => {
       details: `Access link created for "${resolvedTitle}", expires in ${expiresInSeconds}s, oneTimeUse: ${oneTimeUse}`,
     });
 
-    const baseUrl = process.env.FRONTEND_URL || process.env.BACKEND_URL || 'http://localhost:3000';
+    const baseUrl = process.env.FRONTEND_URL || 'https://nandeesh.dev';
     const accessUrl = `${baseUrl}/vault/access/${linkToken}`;
 
     res.status(200).json({

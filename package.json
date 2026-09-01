@@ -7,6 +7,7 @@
     "lint": "npm --prefix frontend run lint",
     "start": "node backend/index.js",
     "build": "cd frontend && npm run build",
+    "heroku-postbuild": "cd backend && npm install",
     "test:mcp": "node backend/tests/mcp-compatibility.mjs",
     "postinstall": "cd backend && npm install"
   }

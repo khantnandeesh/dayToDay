@@ -53,13 +53,21 @@ app.use(cookieParser());
 // Dynamic CORS Configuration
 // ---------------------------------------------------------------------------
 const getAllowedOrigins = async () => {
+  const defaultOrigins = [
+    'https://nandeesh.dev',
+    'https://www.nandeesh.dev',
+    'https://day-to-day-seven.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:3000',
+  ];
   try {
     const dbOrigins = await AllowedOrigin.find({});
     const urls = dbOrigins.map((o) => o.url);
     if (process.env.FRONTEND_URL) urls.push(process.env.FRONTEND_URL);
-    return [...new Set(urls)];
+    return [...new Set([...urls, ...defaultOrigins])];
   } catch {
-    return process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [];
+    const fallback = process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [];
+    return [...new Set([...fallback, ...defaultOrigins])];
   }
 };
 
