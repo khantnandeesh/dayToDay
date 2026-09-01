@@ -297,8 +297,67 @@ export class MonacoLspClient {
     });
   }
 
+  sendResponse(id, result, error = null) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    const payload = {
+      jsonrpc: '2.0',
+      id,
+    };
+    if (error) {
+      payload.error = error;
+    } else {
+      payload.result = result;
+    }
+    this.socket.send(JSON.stringify(payload));
+  }
+
+  handleServerRequest(msg) {
+    const { id, method, params } = msg;
+
+    // 1. workspace/configuration request from Pyright
+    if (method === 'workspace/configuration') {
+      const items = params?.items || [];
+      const result = items.map(() => ({
+        pythonPath: 'python',
+        analysis: {
+          typeCheckingMode: 'basic',
+          autoSearchPaths: true,
+          useLibraryCodeForTypes: true,
+          diagnosticMode: 'workspace',
+          inlayHints: {
+            variableTypes: true,
+            functionReturnTypes: true,
+          },
+        },
+      }));
+      this.sendResponse(id, result);
+      return;
+    }
+
+    // 2. workspace/workspaceFolders request
+    if (method === 'workspace/workspaceFolders') {
+      const result = [
+        {
+          uri: this.config.rootUri || 'file:///workspace',
+          name: 'workspace',
+        },
+      ];
+      this.sendResponse(id, result);
+      return;
+    }
+
+    // 3. window/workDoneProgress/create, client/registerCapability, etc.
+    this.sendResponse(id, null);
+  }
+
   handleMessage(msg) {
-    // Response to a request
+    // 1. Incoming Request from Server (has id AND method)
+    if (msg.id !== undefined && msg.method !== undefined) {
+      this.handleServerRequest(msg);
+      return;
+    }
+
+    // 2. Response to a client-initiated request (has id, NO method)
     if (msg.id !== undefined && this.pendingRequests.has(msg.id)) {
       const { resolve, reject, timeout } = this.pendingRequests.get(msg.id);
       clearTimeout(timeout);
@@ -312,9 +371,14 @@ export class MonacoLspClient {
       return;
     }
 
-    // Diagnostics notification from Pyright
+    // 3. Diagnostics notification from Pyright
     if (msg.method === 'textDocument/publishDiagnostics') {
       this.handlePublishDiagnostics(msg.params);
+      return;
+    }
+
+    // 4. Server log or show message notification
+    if (msg.method === 'window/logMessage' || msg.method === 'window/showMessage') {
       return;
     }
   }
