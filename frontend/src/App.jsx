@@ -11,6 +11,7 @@ import Profile from './pages/Profile';
 import PasswordManager from './pages/PasswordManager';
 import SecurityExplained from './pages/SecurityExplained';
 import SecureDrive from './pages/SecureDrive';
+import Code from './pages/Code';
 import PublicShare from './pages/PublicShare';
 import VaultAccessPage from './pages/VaultAccessPage';
 
@@ -66,6 +67,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <SecureDrive />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/code"
+              element={
+                <ProtectedRoute>
+                  <Code />
                 </ProtectedRoute>
               }
             />

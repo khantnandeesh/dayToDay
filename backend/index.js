@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -12,6 +13,8 @@ import connectDB from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
 import vaultRoutes from './routes/vaultRoutes.js';
 import driveRoutes from './routes/driveRoutes.js';
+import codeRoutes from './routes/codeRoutes.js';
+import { languageServerManager } from './services/lsp/languageServerManager.js';
 import AllowedOrigin from './models/AllowedOrigin.js';
 import { checkEmailProviders } from './config/email.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
@@ -305,6 +308,7 @@ app.post('/cors-admin/delete', async (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/vault', vaultRoutes);
 app.use('/api/drive', driveRoutes);
+app.use('/api/code', codeRoutes);
 
 // Health check
 app.get('/health', async (req, res) => {
@@ -318,6 +322,9 @@ app.get('/health', async (req, res) => {
       sseEndpoint: '/mcp/sse',
       protectedResourceMetadata: '/.well-known/oauth-protected-resource',
       authServerMetadata: '/.well-known/oauth-authorization-server',
+    },
+    lsp: {
+      python: '/lsp/python',
     },
     timestamp: new Date().toISOString(),
   });
@@ -342,9 +349,16 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+// Create HTTP server to support both Express HTTP routes and WebSocket upgrades for LSP
+const server = http.createServer(app);
+
+// Attach Language Server Manager WebSocket server
+languageServerManager.attach(server);
+
+server.listen(PORT, () => {
   console.log(`\n🚀 DayToDay Server running on port ${PORT}`);
   console.log(`📡 Backend URL: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);
   console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
+  console.log(`🐍 Python LSP WebSocket: ws://localhost:${PORT}/lsp/python`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}\n`);
 });

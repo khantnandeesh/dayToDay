@@ -1,6 +1,6 @@
 {
   "name": "DayToDay Backend & MCP Server",
-  "description": "Production-ready DayToDay backend and Model Context Protocol (MCP) server for Claude, Gemini, Cursor, and AI agents with OAuth 2.0 discovery, Streamable HTTP, SSE, Drive storage, Vault status, and session tools.",
+  "description": "Production-ready DayToDay platform with Python Code IDE, real Pyright LSP IntelliSense, OnlineCompiler execution, MCP server for AI agents, Drive storage, and Password Vault.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

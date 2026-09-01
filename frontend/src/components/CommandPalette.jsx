@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
     Search, LayoutDashboard, Shield, HardDrive, User, LogOut,
-    ArrowRight, Lock, Sparkles
+    ArrowRight, Lock, Sparkles, Code2
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useVault } from '../context/VaultContext';
@@ -64,6 +64,15 @@ const CommandPalette = ({ isOpen, onClose }) => {
             type: 'navigation',
             path: '/drive',
             shortcut: 'G S'
+        },
+        {
+            id: 'code',
+            label: 'Code IDE',
+            desc: 'Python IDE with real Pyright IntelliSense & OnlineCompiler execution',
+            icon: Code2,
+            type: 'navigation',
+            path: '/code',
+            shortcut: 'G C'
         },
         {
             id: 'profile',
