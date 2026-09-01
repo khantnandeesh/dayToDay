@@ -1,9 +1,11 @@
 import crypto from 'crypto';
+import User from '../models/User.js';
 import VaultSettings from '../models/VaultSettings.js';
 import VaultItem from '../models/VaultItem.js';
 import AIVaultSession from '../models/AIVaultSession.js';
 import VaultAccessLink from '../models/VaultAccessLink.js';
 import VaultAuditLog from '../models/VaultAuditLog.js';
+import { sendVaultAccessEmail } from '../config/email.js';
 import {
   setMcpVaultSession,
   getMcpVaultSession,
@@ -494,7 +496,7 @@ export const revokeAIVaultSession = async (req, res) => {
 // @access  Private
 export const createVaultAccessLink = async (req, res) => {
   try {
-    const { itemId, sessionToken, expiresInSeconds = 300, oneTimeUse = true } = req.body;
+    const { itemId, sessionToken, expiresInSeconds = 300, oneTimeUse = true, itemPayload, title, itemType } = req.body;
 
     if (!itemId) {
       return res.status(400).json({ success: false, message: 'Item ID required' });
@@ -541,14 +543,20 @@ export const createVaultAccessLink = async (req, res) => {
     }
 
     // Generate opaque token for URL
-    const linkToken = crypto.randomBytes(32).toString('hex');
+    const linkToken = `vault_access_${crypto.randomBytes(24).toString('hex')}`;
     const tokenHash = hashToken(linkToken);
     const expiresAt = new Date(Date.now() + Math.min(expiresInSeconds, 900) * 1000); // Max 15 min
+
+    const resolvedTitle = title || itemPayload?.title || 'Secure Vault Item';
+    const resolvedType = itemType || itemPayload?.type || item.type || 'login';
 
     // Create access link
     const link = await VaultAccessLink.create({
       user: req.user._id,
       vaultItemId: itemId,
+      itemTitle: resolvedTitle,
+      itemType: resolvedType,
+      decryptedSnapshot: itemPayload || null,
       tokenHash,
       expiresAt,
       oneTimeUse,
@@ -561,10 +569,11 @@ export const createVaultAccessLink = async (req, res) => {
       action: 'access_link_created',
       vaultItemId: itemId,
       accessLinkId: link._id,
-      details: `Access link created, expires in ${expiresInSeconds}s, oneTimeUse: ${oneTimeUse}`,
+      details: `Access link created for "${resolvedTitle}", expires in ${expiresInSeconds}s, oneTimeUse: ${oneTimeUse}`,
     });
 
-    const accessUrl = `${process.env.FRONTEND_URL}/vault/access/${linkToken}`;
+    const baseUrl = process.env.FRONTEND_URL || process.env.BACKEND_URL || 'http://localhost:3000';
+    const accessUrl = `${baseUrl}/vault/access/${linkToken}`;
 
     res.status(200).json({
       success: true,
@@ -580,9 +589,9 @@ export const createVaultAccessLink = async (req, res) => {
   }
 };
 
-// @desc    Access vault item via secure link (frontend calls this)
+// @desc    Access vault item via secure link - Step 1: Initial link load & trigger email OTP
 // @route   GET /api/vault/access-link/:token
-// @access  Public (but requires valid token)
+// @access  Public (token-gated)
 export const accessVaultViaLink = async (req, res) => {
   try {
     const { token } = req.params;
@@ -590,50 +599,234 @@ export const accessVaultViaLink = async (req, res) => {
 
     const link = await VaultAccessLink.findOne({
       tokenHash,
-      expiresAt: { $gt: new Date() },
     });
 
     if (!link) {
-      return res.status(404).json({ success: false, message: 'Invalid or expired link' });
+      return res.status(404).json({ success: false, message: 'Secure link not found or invalid' });
+    }
+
+    if (new Date() > new Date(link.expiresAt)) {
+      return res.status(410).json({ success: false, message: 'This secure link has expired' });
     }
 
     if (link.usedAt && link.oneTimeUse) {
-      return res.status(410).json({ success: false, message: 'Link already used' });
+      return res.status(410).json({ success: false, message: 'This one-time link has already been used and burned' });
     }
 
-    // Mark as used if one-time
+    const user = await User.findById(link.user);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Owner account not found' });
+    }
+
+    // Generate 6-digit access code for email verification
+    const accessCode = Math.floor(100000 + Math.random() * 900000).toString();
+    link.accessCode = accessCode;
+    link.accessCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes code validity
+    await link.save();
+
+    // Send email with 6-digit access code to vault owner
+    const remainingMins = Math.max(1, Math.round((new Date(link.expiresAt).getTime() - Date.now()) / (60 * 1000)));
+    try {
+      await sendVaultAccessEmail({
+        email: user.email,
+        code: accessCode,
+        userName: user.name || 'DayToDay User',
+        itemTitle: link.itemTitle || 'Protected Vault Item',
+        itemType: link.itemType || 'Credentials',
+        expiresMinutes: remainingMins,
+      });
+    } catch (emailErr) {
+      console.warn('⚠️ Error triggering access code email:', emailErr.message);
+    }
+
+    // Mask user email for privacy (e.g. n***5@gmail.com)
+    let maskedEmail = 'your registered email';
+    if (user.email) {
+      const parts = user.email.split('@');
+      if (parts.length === 2) {
+        const local = parts[0];
+        const domain = parts[1];
+        const maskedLocal = local.length > 2 
+          ? `${local[0]}***${local[local.length - 1]}` 
+          : `${local[0]}***`;
+        maskedEmail = `${maskedLocal}@${domain}`;
+      }
+    }
+
+    // Audit log link visit
+    await VaultAuditLog.create({
+      user: link.user,
+      action: 'access_link_visited',
+      vaultItemId: link.vaultItemId,
+      accessLinkId: link._id,
+      details: `Secure link visited, email verification code sent to ${maskedEmail}`,
+    });
+
+    res.status(200).json({
+      success: true,
+      title: link.itemTitle || 'Protected Item',
+      itemType: link.itemType || 'login',
+      maskedEmail,
+      expiresAt: link.expiresAt,
+      oneTimeUse: link.oneTimeUse,
+      emailSent: true,
+      message: `A 6-digit verification code has been sent to ${maskedEmail}`,
+    });
+  } catch (error) {
+    console.error('Access Link error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// @desc    Resend 6-digit security code for vault access link
+// @route   POST /api/vault/access-link/:token/resend
+// @access  Public (token-gated)
+export const resendVaultAccessCode = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const tokenHash = hashToken(token);
+
+    const link = await VaultAccessLink.findOne({ tokenHash });
+    if (!link) {
+      return res.status(404).json({ success: false, message: 'Secure link not found' });
+    }
+
+    if (new Date() > new Date(link.expiresAt)) {
+      return res.status(410).json({ success: false, message: 'This secure link has expired' });
+    }
+
+    if (link.usedAt && link.oneTimeUse) {
+      return res.status(410).json({ success: false, message: 'This link has already been used and burned' });
+    }
+
+    const user = await User.findById(link.user);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const accessCode = Math.floor(100000 + Math.random() * 900000).toString();
+    link.accessCode = accessCode;
+    link.accessCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await link.save();
+
+    const remainingMins = Math.max(1, Math.round((new Date(link.expiresAt).getTime() - Date.now()) / (60 * 1000)));
+    await sendVaultAccessEmail({
+      email: user.email,
+      code: accessCode,
+      userName: user.name || 'DayToDay User',
+      itemTitle: link.itemTitle || 'Protected Vault Item',
+      itemType: link.itemType || 'Credentials',
+      expiresMinutes: remainingMins,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'A new 6-digit verification code was sent to your email.',
+    });
+  } catch (error) {
+    console.error('Resend Code error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// @desc    Verify 6-digit code and securely reveal credentials without login
+// @route   POST /api/vault/access-link/:token/verify
+// @access  Public (token-gated)
+export const verifyVaultAccessCode = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { code } = req.body;
+
+    if (!code || !code.trim()) {
+      return res.status(400).json({ success: false, message: '6-digit verification code is required' });
+    }
+
+    const tokenHash = hashToken(token);
+    const link = await VaultAccessLink.findOne({ tokenHash });
+
+    if (!link) {
+      return res.status(404).json({ success: false, message: 'Secure link not found' });
+    }
+
+    if (new Date() > new Date(link.expiresAt)) {
+      return res.status(410).json({ success: false, message: 'This secure link has expired' });
+    }
+
+    if (link.usedAt && link.oneTimeUse) {
+      return res.status(410).json({ success: false, message: 'This one-time link has already been used and burned' });
+    }
+
+    if (!link.accessCode || new Date() > new Date(link.accessCodeExpiresAt)) {
+      return res.status(400).json({ success: false, message: 'Verification code has expired. Please request a new code.' });
+    }
+
+    if (code.trim() !== link.accessCode.trim()) {
+      return res.status(400).json({ success: false, message: 'Invalid 6-digit verification code. Please check your email and try again.' });
+    }
+
+    // Code is valid! Mark as used if one-time
     if (link.oneTimeUse) {
       link.usedAt = new Date();
       await link.save();
     }
 
-    // Fetch the item
-    const item = await VaultItem.findById(link.vaultItemId);
-    if (!item) {
-      return res.status(404).json({ success: false, message: 'Item not found' });
-    }
-
     // Audit log
     await VaultAuditLog.create({
       user: link.user,
-      action: 'access_link_used',
+      action: 'access_link_unlocked_via_email',
       vaultItemId: link.vaultItemId,
       accessLinkId: link._id,
-      details: 'Access link used to view item',
+      details: `Item "${link.itemTitle}" unlocked and revealed via email code verification (One-time burn: ${link.oneTimeUse})`,
     });
 
-    // Return metadata only (frontend will handle decryption if user unlocks)
+    const payload = link.decryptedSnapshot || {};
+
+    // Normalize output fields for display
+    let title = link.itemTitle || payload.title || 'Protected Item';
+    let type = link.itemType || payload.type || 'login';
+    let username = payload.username || '';
+    let password = payload.password || '';
+    let url = payload.url || payload.website || '';
+    let notes = payload.notes || '';
+    let fields = payload.fields || [];
+
+    // Extract username/url/password from custom fields if not top-level
+    if (Array.isArray(fields)) {
+      if (!username) {
+        const uField = fields.find(f => f.type === 'email' || f.label?.toLowerCase().includes('user') || f.label?.toLowerCase().includes('email') || f.label?.toLowerCase().includes('account'));
+        if (uField) username = uField.value;
+      }
+      if (!password) {
+        const pField = fields.find(f => f.type === 'password' || f.label?.toLowerCase().includes('pass') || f.label?.toLowerCase().includes('secret') || f.label?.toLowerCase().includes('pin'));
+        if (pField) password = pField.value;
+      }
+      if (!url) {
+        const urlField = fields.find(f => f.type === 'url' || f.label?.toLowerCase().includes('url') || f.label?.toLowerCase().includes('web'));
+        if (urlField) url = urlField.value;
+      }
+    }
+
     res.status(200).json({
       success: true,
-      itemId: item._id,
-      type: item.type,
-      isFavorite: item.isFavorite,
-      updatedAt: item.updatedAt,
-      // Do NOT return encrypted data here - let frontend handle via normal flow
-      message: 'Use your master password in the DayToDay UI to decrypt this item',
+      item: {
+        title,
+        type,
+        username,
+        password,
+        url,
+        notes,
+        fields,
+        cardholderName: payload.cardholderName || '',
+        cardNumber: payload.cardNumber || '',
+        expiryDate: payload.expiryDate || '',
+        cvv: payload.cvv || '',
+      },
+      oneTimeUse: link.oneTimeUse,
+      burned: Boolean(link.oneTimeUse),
+      message: 'Credentials successfully decrypted',
     });
   } catch (error) {
-    console.error('Access Link error:', error);
+    console.error('Verify Code error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };

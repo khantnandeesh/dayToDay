@@ -3142,6 +3142,26 @@ function buildServer(ctx) {
             }
           }
 
+          // Decrypt item snapshot using active session key if available
+          let decryptedPayload = null;
+          let itemTitle = 'Secure Vault Item';
+          let itemType = item.type || 'login';
+
+          const sessionResolved = resolveKeyForVaultAction(ctx.userId, null, null);
+          const activeKey = activeSession?.key || sessionResolved?.key;
+
+          if (activeKey) {
+            try {
+              decryptedPayload = decryptVaultBlobSync(item.encryptedData, item.iv, activeKey);
+              if (decryptedPayload) {
+                itemTitle = decryptedPayload.title || itemTitle;
+                itemType = decryptedPayload.type || itemType;
+              }
+            } catch (decErr) {
+              console.warn('⚠️ Could not decrypt item for link snapshot:', decErr.message);
+            }
+          }
+
           // Generate opaque token
           const linkToken = `vault_access_${crypto.randomBytes(24).toString('hex')}`;
           const tokenHash = hashToken(linkToken);
@@ -3150,6 +3170,9 @@ function buildServer(ctx) {
           const link = await VaultAccessLink.create({
             user: ctx.userId,
             vaultItemId,
+            itemTitle,
+            itemType,
+            decryptedSnapshot: decryptedPayload,
             tokenHash,
             expiresAt,
             oneTimeUse,
@@ -3165,7 +3188,7 @@ function buildServer(ctx) {
             sessionId: capabilitySession?._id || null,
             metadata: {
               source: 'mcp',
-              details: `Link created, expires in ${Math.min(expiresInMinutes, 15)} min, oneTimeUse: ${oneTimeUse}, sessionType: ${capabilitySession ? 'capability' : 'legacy'}`,
+              details: `Link created for "${itemTitle}", expires in ${Math.min(expiresInMinutes, 15)} min, oneTimeUse: ${oneTimeUse}, sessionType: ${capabilitySession ? 'capability' : 'legacy'}`,
             },
           });
 

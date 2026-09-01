@@ -12,6 +12,7 @@ import PasswordManager from './pages/PasswordManager';
 import SecurityExplained from './pages/SecurityExplained';
 import SecureDrive from './pages/SecureDrive';
 import PublicShare from './pages/PublicShare';
+import VaultAccessPage from './pages/VaultAccessPage';
 
 function App() {
   return (
@@ -78,6 +79,8 @@ function App() {
             />
             <Route path="/security" element={<SecurityExplained />} />
             <Route path="/share/:token" element={<PublicShare />} />
+            <Route path="/vault/access/:token" element={<VaultAccessPage />} />
+            <Route path="/vault-access/:token" element={<VaultAccessPage />} />
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </Router>

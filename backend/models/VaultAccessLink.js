@@ -11,6 +11,15 @@ const vaultAccessLinkSchema = new mongoose.Schema({
     ref: 'VaultItem',
     required: true,
   },
+  // Item metadata
+  itemTitle: {
+    type: String,
+    default: 'Secure Vault Item',
+  },
+  itemType: {
+    type: String,
+    default: 'login',
+  },
   // Hashed token (URL contains opaque token, we store hash)
   tokenHash: {
     type: String,
@@ -26,6 +35,17 @@ const vaultAccessLinkSchema = new mongoose.Schema({
   oneTimeUse: {
     type: Boolean,
     default: true,
+  },
+  // Email verification code & expiry
+  accessCode: {
+    type: String,
+  },
+  accessCodeExpiresAt: {
+    type: Date,
+  },
+  // Temporary snapshot of item payload for one-time access
+  decryptedSnapshot: {
+    type: mongoose.Schema.Types.Mixed,
   },
   // Track which session created this link
   createdBySessionId: {

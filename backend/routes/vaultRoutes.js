@@ -16,6 +16,8 @@ import {
   revokeAIVaultSession,
   createVaultAccessLink,
   accessVaultViaLink,
+  resendVaultAccessCode,
+  verifyVaultAccessCode,
   revokeVaultAccessLink,
   getVaultAuditLog,
 } from '../controllers/vaultController.js';
@@ -44,7 +46,9 @@ router.post('/ai-session/revoke/:id', protect, revokeAIVaultSession);
 
 // Secure access link routes
 router.post('/access-link/create', protect, createVaultAccessLink);
-router.get('/access-link/:token', accessVaultViaLink); // Public - token-gated
+router.get('/access-link/:token', accessVaultViaLink); // Public - triggers code & returns masked email
+router.post('/access-link/:token/resend', resendVaultAccessCode); // Public - resends code
+router.post('/access-link/:token/verify', verifyVaultAccessCode); // Public - verifies code & reveals secret
 router.post('/access-link/revoke/:id', protect, revokeVaultAccessLink);
 
 // Audit log

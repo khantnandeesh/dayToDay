@@ -143,7 +143,7 @@ const sendMailResilient = async ({ to, subject, html, text, fromTitle = "DayToDa
   const resend = getResend();
   if (resend) {
     // Determine from address for Resend
-    const customFrom = process.env.EMAIL_FROM || process.env.RESEND_FROM || `DayToDay Security <security@nandeeshkhant.info>`;
+    const customFrom = process.env.EMAIL_FROM || process.env.RESEND_FROM || `DayToDay Security <security@mails.nandeesh.dev>`;
     const testFrom = `DayToDay Security <onboarding@resend.dev>`;
 
     // Attempt 2a: configured from address
@@ -319,6 +319,57 @@ export const sendLoginAlert = async (email, userName, deviceInfo) => {
   });
 };
 
+// ------------------------------------------------------
+//  SEND ONE-TIME VAULT ACCESS CODE EMAIL
+// ------------------------------------------------------
+export const sendVaultAccessEmail = async ({ email, code, userName, itemTitle, itemType, expiresMinutes = 10 }) => {
+  const displayTitle = itemTitle || "Protected Vault Item";
+  const displayType = itemType || "Credentials";
+
+  const content = `
+    <h1 style="margin:0 0 20px 0;font-size:24px;font-weight:700;color:#0f172a;letter-spacing:-0.5px;">🔐 Secure Vault Access Code</h1>
+    
+    <p style="margin:0 0 16px 0;font-size:15px;color:#334155;line-height:1.6;">
+      Hello ${userName || "there"}, a request was made via secure one-time link to access your vault item:
+    </p>
+
+    <div style="margin:20px 0;padding:16px 20px;background-color:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid #0284c7;border-radius:10px;">
+      <div style="font-size:16px;font-weight:700;color:#0f172a;">${displayTitle}</div>
+      <div style="font-size:13px;color:#64748b;margin-top:4px;text-transform:capitalize;">Category: ${displayType} &bull; One-Time Access</div>
+    </div>
+
+    <p style="margin:0 0 12px 0;font-size:14px;color:#334155;">
+      Enter the 6-digit access code below in the DayToDay web portal to securely reveal this credential:
+    </p>
+
+    <div style="margin:24px 0;">
+      <span style="font-family:'SF Mono', 'Menlo', 'Consolas', 'Courier New', monospace;font-size:32px;font-weight:700;letter-spacing:6px;color:#0284c7;background-color:#f0f9ff;border:1px solid #bae6fd;padding:12px 24px;border-radius:10px;display:inline-block;">
+        ${code}
+      </span>
+    </div>
+
+    <p style="margin:0 0 8px 0;font-size:13px;color:#64748b;line-height:1.5;">
+      ⏱️ This code will expire in <strong>${expiresMinutes} minutes</strong>. Once used, the one-time link is automatically burned.
+    </p>
+    <p style="margin:8px 0 0 0;font-size:12px;color:#94a3b8;">
+      If you did not initiate this access, your master password is safe and no credentials have been exposed.
+    </p>
+  `;
+
+  const html = wrapHtml(content, "Vault Access Code");
+  const subject = `${code} is your DayToDay Vault Access Code for ${displayTitle}`;
+  const text = `Hello ${userName || "there"},\n\nYour one-time access code for "${displayTitle}" is: ${code}\n\nThis code will expire in ${expiresMinutes} minutes.`;
+
+  console.log(`🔐 [VAULT ACCESS DISPATCH] Generating access code ${code} for "${displayTitle}" -> ${email}`);
+  return await sendMailResilient({
+    to: email,
+    subject,
+    html,
+    text,
+    fromTitle: "DayToDay Vault Security",
+  });
+};
+
 /**
  * Diagnostic test utility to check configured email providers
  */
@@ -336,6 +387,7 @@ export default {
   send2FACode,
   sendWelcomeEmail,
   sendLoginAlert,
+  sendVaultAccessEmail,
   checkEmailProviders,
 };
 
