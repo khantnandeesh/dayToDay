@@ -58,8 +58,13 @@ export class MonacoLspClient {
     if (customBackend && typeof customBackend === 'string' && customBackend.trim().length > 0) {
       base = customBackend.replace(/^http/, 'ws');
     } else if (typeof window !== 'undefined') {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      base = `${protocol}//${window.location.host}`;
+      const hostname = window.location.hostname;
+      if (hostname.includes('vercel.app') || hostname === 'nandeesh.dev' || hostname.endsWith('.nandeesh.dev')) {
+        base = 'wss://daytoday-backend-90e6c0a7d7b8.herokuapp.com';
+      } else {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        base = `${protocol}//${window.location.host}`;
+      }
     } else {
       base = 'ws://localhost:3000';
     }

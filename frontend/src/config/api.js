@@ -1,6 +1,19 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_BACKEND_URL !== undefined ? import.meta.env.VITE_BACKEND_URL : '';
+const getBackendBaseUrl = () => {
+  if (import.meta.env.VITE_BACKEND_URL !== undefined && import.meta.env.VITE_BACKEND_URL !== '') {
+    return import.meta.env.VITE_BACKEND_URL;
+  }
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    if (hostname.includes('vercel.app') || hostname === 'nandeesh.dev' || hostname.endsWith('.nandeesh.dev')) {
+      return 'https://daytoday-backend-90e6c0a7d7b8.herokuapp.com';
+    }
+  }
+  return '';
+};
+
+const API_URL = getBackendBaseUrl();
 
 const api = axios.create({
   baseURL: API_URL ? `${API_URL}/api` : '/api',
