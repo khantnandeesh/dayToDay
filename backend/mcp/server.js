@@ -1228,23 +1228,23 @@ function buildServer(ctx) {
     {
       name: 'get_vault_status',
       description:
-        'Check if the authenticated user has initialized their zero-knowledge encrypted vault.',
+        'Check if the user has initialized their encrypted vault. Returns: { isInitialized: boolean, itemCount: number, hasMasterPassword: boolean }. Example: Call this before any vault operation to verify the vault exists.',
       inputSchema: { type: 'object', properties: {} },
     },
     {
       name: 'list_vault_items',
       description:
-        'List metadata of encrypted items stored in the user vault (ID, item type like website/bank/wifi/note/wallet, favorite flag, updated time). Does not require master password.',
+        'List vault item metadata (ID, title, type, favorite status, updated timestamp) WITHOUT decrypting passwords. Does NOT require session token or master password. Returns array of items with basic info only. Example: Call this to see what items exist in the vault before asking user to authorize decryption.',
       inputSchema: {
         type: 'object',
         properties: {
           type: {
             type: 'string',
-            description: "Optional filter by item type: 'all', 'website', 'bank', 'wifi', 'wallet', 'note', 'custom'.",
+            description: "Filter by item type: 'all' (default), 'website', 'bank', 'wifi', 'wallet', 'note', 'custom'.",
           },
           favoritesOnly: {
             type: 'boolean',
-            description: 'Filter for items marked as favorite.',
+            description: 'If true, only return favorited items. Default: false.',
           },
         },
       },
@@ -1252,27 +1252,27 @@ function buildServer(ctx) {
     {
       name: 'list_passwords',
       description:
-        'List vault password accounts and item headers. Decrypts and lists account titles, usernames, websites, and field keys. Uses active AI Vault Session (authorized securely in DayToDay frontend modal), session_token, or master_password.',
+        'Decrypt and list vault credentials with titles, usernames, and websites. REQUIRES active session (legacy or capability). Use this when user asks "show my passwords" or "what passwords do I have". Returns decrypted metadata for each item. Example: { session_token: "mcp_auth_xxx" } or relies on active legacy session.',
       inputSchema: {
         type: 'object',
         properties: {
           session_token: {
             type: 'string',
             description:
-              'Optional one-time or temporary session token (mcp_auth_...) generated securely in the DayToDay frontend modal. Preferred over typing master_password in chat.',
+              'Optional. Session token from request_ai_vault_authorization. If omitted, uses active legacy session.',
           },
           master_password: {
             type: 'string',
             description:
-              'Optional DayToDay Master Password. NOTE: To protect privacy, prefer unlocking an AI Session via the DayToDay UI modal instead of sending raw passwords in chat.',
+              'Optional. User\'s master password. SECURITY: Prefer session_token or active session over passing master password in chat.',
           },
           type: {
             type: 'string',
-            description: "Optional filter by type: 'website', 'bank', 'wifi', 'wallet', 'note', 'custom'.",
+            description: "Filter by type: 'all' (default), 'website', 'bank', 'wifi', 'wallet', 'note', 'custom'.",
           },
           query: {
             type: 'string',
-            description: 'Search filter to match against item title, username, or website.',
+            description: "Search filter to match against title, username, or website. Example: query='gmail' finds Gmail accounts.",
           },
         },
       },
@@ -1280,23 +1280,23 @@ function buildServer(ctx) {
     {
       name: 'get_password',
       description:
-        'Retrieve and decrypt a specific vault item or credential (including username, password, URLs, notes, and custom fields). Automatically uses active AI Vault Session (authorized securely in DayToDay frontend modal), session_token, or master_password.',
+        'Decrypt and retrieve full credentials (username, password, website, notes, custom fields) for ONE vault item. REQUIRES active session or session_token. Use when user asks for a specific password. Example: { id: "64f3a..." } or { id: "Netflix", session_token: "mcp_auth_xxx" }. Returns all decrypted fields.',
       inputSchema: {
         type: 'object',
         properties: {
           id: {
             type: 'string',
-            description: 'The Vault Item ID or exact item Title to retrieve.',
+            description: 'Required. Vault item ID (from list_vault_items) OR exact item title (case-insensitive match).',
           },
           session_token: {
             type: 'string',
             description:
-              'Optional one-time session token (mcp_auth_...) generated securely in the DayToDay frontend modal.',
+              'Optional. Session token from request_ai_vault_authorization. If omitted, uses active legacy session.',
           },
           master_password: {
             type: 'string',
             description:
-              'Optional Master Password. NOTE: Prefer authorizing an AI Session in the DayToDay web modal.',
+              'Optional. User\'s master password. SECURITY: Prefer session_token or active session.',
           },
         },
         required: ['id'],
@@ -1305,30 +1305,30 @@ function buildServer(ctx) {
     {
       name: 'create_password',
       description:
-        'Encrypt and save a new password or credential into the user DayToDay Vault with zero-knowledge AES-GCM encryption. Automatically uses active AI Vault Session, session_token, or master_password.',
+        'Create a new encrypted vault credential. REQUIRES active session or session_token. Use when user wants to save a new password. Example: { title: "GitHub", username: "user@email.com", password: "secret123", website: "https://github.com", type: "website" }. Returns the new item ID.',
       inputSchema: {
         type: 'object',
         properties: {
           title: {
             type: 'string',
-            description: "The name/title of the credential, e.g. 'Google Account', 'GitHub', 'Chase Bank'.",
+            description: "Required. Credential name, e.g. 'Netflix', 'GitHub', 'Chase Bank'.",
           },
           type: {
             type: 'string',
             enum: ['website', 'bank', 'wifi', 'wallet', 'note', 'custom'],
-            description: "Type of the credential. Defaults to 'website'.",
+            description: "Item category. Default: 'website'.",
           },
           username: {
             type: 'string',
-            description: 'The username, email, or login identifier.',
+            description: 'Username, email, or login identifier. Example: "user@example.com".',
           },
           password: {
             type: 'string',
-            description: 'The password or secret to store.',
+            description: 'Required. The password or secret to store.',
           },
           website: {
             type: 'string',
-            description: "Optional website URL, e.g. 'https://github.com'.",
+            description: "Website URL. Example: 'https://github.com'.",
           },
           notes: {
             type: 'string',
@@ -1345,19 +1345,19 @@ function buildServer(ctx) {
               },
               required: ['label', 'value'],
             },
-            description: 'Optional additional custom fields for this item.',
+            description: 'Optional custom fields. Example: [{ label: "Recovery Email", value: "backup@email.com", type: "email" }].',
           },
           isFavorite: {
             type: 'boolean',
-            description: 'Set to true to mark this credential as a favorite.',
+            description: 'Mark as favorite. Default: false.',
           },
           session_token: {
             type: 'string',
-            description: 'Optional one-time session authorization token generated in the DayToDay UI modal.',
+            description: 'Optional. Session token from request_ai_vault_authorization. If omitted, uses active legacy session.',
           },
           master_password: {
             type: 'string',
-            description: 'Optional Master Password. Prefer unlocking via DayToDay frontend modal.',
+            description: 'Optional. User\'s master password. SECURITY: Prefer session_token or active session.',
           },
         },
         required: ['title', 'password'],
@@ -1366,38 +1366,38 @@ function buildServer(ctx) {
     {
       name: 'update_password',
       description:
-        'Update or modify an existing password or credential item in the vault. Encrypts the updated record using the active AI Session, session_token, or master_password.',
+        'Update an existing vault credential. REQUIRES active session or session_token. Only pass fields you want to change. Example: { id: "64f3a...", password: "newSecret123" } updates only the password. Returns updated item.',
       inputSchema: {
         type: 'object',
         properties: {
           id: {
             type: 'string',
-            description: 'The ID of the vault item to update.',
+            description: 'Required. Vault item ID to update.',
           },
           title: {
             type: 'string',
-            description: 'Updated title/name.',
+            description: 'New title. Omit to keep existing.',
           },
           type: {
             type: 'string',
             enum: ['website', 'bank', 'wifi', 'wallet', 'note', 'custom'],
-            description: 'Updated category type.',
+            description: 'New category. Omit to keep existing.',
           },
           username: {
             type: 'string',
-            description: 'Updated username or email.',
+            description: 'New username. Omit to keep existing.',
           },
           password: {
             type: 'string',
-            description: 'Updated password or secret value.',
+            description: 'New password. Omit to keep existing.',
           },
           website: {
             type: 'string',
-            description: 'Updated website URL.',
+            description: 'New website URL. Omit to keep existing.',
           },
           notes: {
             type: 'string',
-            description: 'Updated secure notes.',
+            description: 'New notes. Omit to keep existing.',
           },
           fields: {
             type: 'array',
@@ -1410,19 +1410,15 @@ function buildServer(ctx) {
               },
               required: ['label', 'value'],
             },
-            description: 'Updated custom fields list.',
+            description: 'Replace custom fields array. Omit to keep existing.',
           },
           isFavorite: {
             type: 'boolean',
-            description: 'Mark or unmark as favorite.',
+            description: 'New favorite status. Omit to keep existing.',
           },
           session_token: {
             type: 'string',
-            description: 'Optional session authorization token generated from the UI modal.',
-          },
-          master_password: {
-            type: 'string',
-            description: 'Optional Master Password.',
+            description: 'Optional. Session token. If omitted, uses active legacy session.',
           },
         },
         required: ['id'],
@@ -1430,13 +1426,14 @@ function buildServer(ctx) {
     },
     {
       name: 'delete_vault_item',
-      description: 'Delete an item from the user DayToDay Vault by ID.',
+      description:
+        'Permanently delete a vault item by ID. REQUIRES active session. This action cannot be undone. Use when user explicitly asks to remove a saved credential. Example: { id: "64f3a..." } deletes the item with that ID.',
       inputSchema: {
         type: 'object',
         properties: {
           id: {
             type: 'string',
-            description: 'The ID of the vault item to delete.',
+            description: 'Required. Vault item ID (from list_passwords or list_vault_items) to permanently delete.',
           },
         },
         required: ['id'],
@@ -1445,33 +1442,33 @@ function buildServer(ctx) {
     {
       name: 'generate_password',
       description:
-        'Generate a cryptographically secure, high-entropy password or passphrase with customizable character rules.',
+        'Generate a cryptographically secure random password. Does NOT save it to the vault - just returns the string. Use when user asks for a strong password, then offer to save it with create_password. Example: { length: 24 } returns something like "xK9#mP2$vL5@nQ8wR3&tY7*j".',
       inputSchema: {
         type: 'object',
         properties: {
           length: {
             type: 'number',
-            description: 'Length of the password (default: 20, min: 8, max: 128).',
+            description: 'Password length between 8-128 characters. Default: 20.',
           },
           includeUppercase: {
             type: 'boolean',
-            description: 'Include uppercase letters (default: true).',
+            description: 'Include A-Z uppercase. Default: true.',
           },
           includeLowercase: {
             type: 'boolean',
-            description: 'Include lowercase letters (default: true).',
+            description: 'Include a-z lowercase. Default: true.',
           },
           includeNumbers: {
             type: 'boolean',
-            description: 'Include numbers 0-9 (default: true).',
+            description: 'Include 0-9 digits. Default: true.',
           },
           includeSymbols: {
             type: 'boolean',
-            description: 'Include special characters !@#$%^&*()_+-=[]{}|;:,.<>? (default: true).',
+            description: 'Include !@#$%^&*()_+-=[]{}|;:,.<>? symbols. Default: true.',
           },
           avoidAmbiguous: {
             type: 'boolean',
-            description: 'Avoid confusing characters like l, 1, I, O, 0 (default: false).',
+            description: 'Exclude confusing characters like l, 1, I, O, 0. Default: false.',
           },
         },
       },
@@ -1479,26 +1476,58 @@ function buildServer(ctx) {
     {
       name: 'toggle_vault_favorite',
       description:
-        'Toggle or set the favorite status of a vault item.',
+        'Toggle or explicitly set the favorite/star status of a vault item. Does NOT require vault session. Example: { itemId: "64f3a..." } flips the current favorite status. { itemId: "64f3a...", isFavorite: true } sets it to favorite.',
       inputSchema: {
         type: 'object',
         properties: {
           itemId: {
             type: 'string',
-            description: 'The ID of the vault item.',
+            description: 'Required. Vault item ID (from list_vault_items or list_passwords).',
           },
           isFavorite: {
             type: 'boolean',
-            description: 'Optional explicit favorite status. If omitted, flips the current status.',
+            description: 'Optional. If provided, sets favorite to this value. If omitted, toggles the current status.',
           },
         },
         required: ['itemId'],
       },
     },
     {
+      name: 'request_ai_vault_authorization',
+      description:
+        'Initiate vault authorization for the AI. Returns a URL the user must open in the DayToDay web app to securely enter their master password and grant permissions. Use this FIRST when no active session exists and the user wants vault access. Example: Call with no arguments to get an authorization URL. After user authorizes, all vault tools will work.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          permissions: {
+            type: 'object',
+            properties: {
+              listItems: { type: 'boolean', description: 'Allow listing vault item metadata.' },
+              readMetadata: { type: 'boolean', description: 'Allow reading item titles and usernames (not passwords).' },
+              createSecureLink: { type: 'boolean', description: 'Allow creating temporary access links.' },
+              revealSecret: { type: 'boolean', description: 'Allow decrypting full passwords.' },
+              createItems: { type: 'boolean', description: 'Allow creating new vault items.' },
+              updateItems: { type: 'boolean', description: 'Allow updating existing vault items.' },
+              deleteItems: { type: 'boolean', description: 'Allow deleting vault items.' },
+            },
+            description: 'Permissions to request. Default: { listItems: true, readMetadata: true, createSecureLink: true }.',
+          },
+          allowedItemIds: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional. Restrict session to specific vault item IDs. Omit for full vault access.',
+          },
+          durationMinutes: {
+            type: 'number',
+            description: 'Session duration in minutes. Default: 30, max: 120.',
+          },
+        },
+      },
+    },
+    {
       name: 'get_ai_vault_session_info',
       description:
-        'Get information about the current AI vault session, including expiration time and permissions.',
+        'Show current vault session status: whether a session is active, when it expires, and what permissions it has. Use this to check if the user has already authorized a session. Example: Call with no arguments. Returns { hasActiveSession: true/false, expiresAt, remainingMinutes, permissions }.',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -1507,21 +1536,21 @@ function buildServer(ctx) {
     {
       name: 'create_secure_vault_link',
       description:
-        'Create a temporary secure link to access a specific vault item. The link expires and can only be used once.',
+        'Create a temporary, one-time-use link for the user to view a specific vault credential in the DayToDay web UI. REQUIRES active session with createSecureLink permission. The link does NOT contain the password - it opens the vault item page where the user decrypts it locally. Example: { vaultItemId: "64f3a..." } returns { url: "https://...", expiresInSeconds: 300, linkId: "..." }.',
       inputSchema: {
         type: 'object',
         properties: {
           vaultItemId: {
             type: 'string',
-            description: 'The ID of the vault item to create a link for.',
+            description: 'Required. Vault item ID (from list_passwords) to create an access link for.',
           },
           expiresInMinutes: {
             type: 'number',
-            description: 'How long the link should be valid (default: 15 minutes, max: 60 minutes).',
+            description: 'Link validity in minutes. Default: 5, max: 15.',
           },
           oneTimeUse: {
             type: 'boolean',
-            description: 'Whether the link can only be used once (default: true).',
+            description: 'If true, link becomes invalid after first use. Default: true.',
           },
         },
         required: ['vaultItemId'],
@@ -1530,13 +1559,13 @@ function buildServer(ctx) {
     {
       name: 'revoke_secure_vault_link',
       description:
-        'Revoke a previously created secure vault link, making it invalid immediately.',
+        'Immediately invalidate a previously created secure access link. Use when the user wants to cancel a link they shared. Example: { linkId: "64f3a..." } marks the link as used/revoked so it cannot be accessed.',
       inputSchema: {
         type: 'object',
         properties: {
           linkId: {
             type: 'string',
-            description: 'The ID of the secure link to revoke.',
+            description: 'Required. The ID of the secure link to revoke (returned from create_secure_vault_link).',
           },
         },
         required: ['linkId'],
@@ -1545,7 +1574,7 @@ function buildServer(ctx) {
     {
       name: 'list_secure_vault_links',
       description:
-        'List all active secure vault links created during the current AI session.',
+        'List all secure access links (active and recently used) for the current user. Shows which links are still valid and which have been used or expired. Example: Call with no arguments. Returns { activeLinks: [...], usedOrExpiredLinks: [...] }.',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -1554,13 +1583,13 @@ function buildServer(ctx) {
     {
       name: 'access_vault_item_via_link',
       description:
-        'Access a vault item using a secure link token. This does not require full vault session authentication.',
+        'Retrieve vault item metadata using a secure link token (the vault_access_... string from create_secure_vault_link). Does NOT require vault session - only the link token. Returns item type and metadata only (not the decrypted password). Example: { linkToken: "vault_access_abc123..." } returns { id, type, isFavorite, updatedAt }.',
       inputSchema: {
         type: 'object',
         properties: {
           linkToken: {
             type: 'string',
-            description: 'The secure link token received from create_secure_vault_link.',
+            description: 'Required. The full vault_access_... token from create_secure_vault_link response.',
           },
         },
         required: ['linkToken'],
@@ -3077,34 +3106,40 @@ function buildServer(ctx) {
           const item = await VaultItem.findOne({ _id: vaultItemId, user: ctx.userId });
           if (!item) throw new Error('Vault item not found or does not belong to you.');
 
-          // Check session permission
-          const activeSession = await AIVaultSession.findOne({
+          // Check for either legacy in-memory session OR capability-based session
+          const legacySession = getMcpVaultSession(ctx.userId);
+          const capabilitySession = await AIVaultSession.findOne({
             user: ctx.userId,
             expiresAt: { $gt: new Date() },
             revoked: false,
           }).sort({ createdAt: -1 });
 
+          const activeSession = capabilitySession || legacySession;
+
           if (!activeSession) {
             return jsonResult({
               success: false,
               status: 'requires_vault_authorization',
-              message: 'No active AI Vault Session. Please authorize a session first via the DayToDay web modal.',
+              message: 'No active vault session. Please authorize first using /api/vault/mcp/authorize or create an AI session via the DayToDay web modal.',
             }, true);
           }
 
-          if (!activeSession.permissions.createSecureLink) {
-            return jsonResult({
-              success: false,
-              error: 'Current session does not have permission to create secure links.',
-            }, true);
-          }
+          // If using capability-based session, check permissions
+          if (capabilitySession) {
+            if (!capabilitySession.permissions.createSecureLink) {
+              return jsonResult({
+                success: false,
+                error: 'Current session does not have permission to create secure links.',
+              }, true);
+            }
 
-          // Check allowed items
-          if (activeSession.allowedItemIds?.length > 0 && !activeSession.allowedItemIds.includes(vaultItemId)) {
-            return jsonResult({
-              success: false,
-              error: 'This item is not in the allowed items list for this session.',
-            }, true);
+            // Check allowed items (only for capability sessions)
+            if (capabilitySession.allowedItemIds?.length > 0 && !capabilitySession.allowedItemIds.includes(vaultItemId)) {
+              return jsonResult({
+                success: false,
+                error: 'This item is not in the allowed items list for this session.',
+              }, true);
+            }
           }
 
           // Generate opaque token
@@ -3118,7 +3153,7 @@ function buildServer(ctx) {
             tokenHash,
             expiresAt,
             oneTimeUse,
-            createdBySessionId: activeSession._id,
+            createdBySessionId: capabilitySession?._id || null,
           });
 
           // Audit log
@@ -3127,10 +3162,10 @@ function buildServer(ctx) {
             action: 'link_created',
             vaultItemId,
             accessLinkId: link._id,
-            sessionId: activeSession._id,
+            sessionId: capabilitySession?._id || null,
             metadata: {
               source: 'mcp',
-              details: `Link created, expires in ${Math.min(expiresInMinutes, 15)} min, oneTimeUse: ${oneTimeUse}`,
+              details: `Link created, expires in ${Math.min(expiresInMinutes, 15)} min, oneTimeUse: ${oneTimeUse}, sessionType: ${capabilitySession ? 'capability' : 'legacy'}`,
             },
           });
 
