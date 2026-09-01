@@ -333,18 +333,18 @@ const Code = () => {
         {/* IDE Main Workspace */}
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 min-h-[580px]">
           {/* Left Column: Monaco Editor (65% on desktop ~ 8 cols) */}
-          <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col min-h-[420px] lg:min-h-[600px]">
+          <div className="lg:col-span-8 bg-[#1e1e1e] border border-slate-700/80 rounded-xl shadow-lg overflow-hidden flex flex-col min-h-[420px] lg:min-h-[600px]">
             {/* Editor Header Tab */}
-            <div className="h-10 bg-slate-100/90 border-b border-slate-200 px-3 flex items-center justify-between text-xs text-slate-600 font-mono">
+            <div className="h-10 bg-[#252526] border-b border-[#333333] px-3 flex items-center justify-between text-xs text-slate-300 font-mono">
               <div className="flex items-center gap-2">
-                <span className="px-2.5 py-1 bg-white border border-slate-200 rounded text-slate-800 font-medium flex items-center gap-1.5 shadow-2xs">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <span className="px-2.5 py-1 bg-[#1e1e1e] border border-[#3c3c3c] rounded text-slate-200 font-medium flex items-center gap-1.5 shadow-2xs">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
                   {languageConfig.fileName}
                 </span>
-                <span className="text-slate-400 hidden sm:inline">Python 3.14</span>
+                <span className="text-slate-500 hidden sm:inline">Python 3.14</span>
               </div>
               <div className="text-[11px] text-slate-400 flex items-center gap-2">
-                <span>Pyright LSP</span>
+                <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">Pyright LSP</span>
               </div>
             </div>
 
@@ -356,7 +356,7 @@ const Code = () => {
                 value={code}
                 onChange={(val) => setCode(val || '')}
                 onMount={handleEditorDidMount}
-                theme="vs"
+                theme="vs-dark"
                 options={{
                   fontSize: 14,
                   lineNumbers: 'on',

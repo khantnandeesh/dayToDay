@@ -81,23 +81,25 @@
   background: #6b7280; 
 }
 
-/* Monaco Editor IntelliSense, Suggestion, and Parameter Hints Styling */
+/* Monaco Editor IntelliSense, Suggestion, and Parameter Hints Styling (Dark Mode) */
 .monaco-editor .suggest-widget {
   min-width: 420px !important;
   max-width: 700px !important;
   min-height: 220px !important;
   max-height: 400px !important;
   border-radius: 8px !important;
-  border: 1px solid #cbd5e1 !important;
-  box-shadow: 0 10px 30px -4px rgba(15, 23, 42, 0.16), 0 4px 6px -2px rgba(15, 23, 42, 0.05) !important;
+  border: 1px solid #3c3c3c !important;
+  box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.3) !important;
   z-index: 99999 !important;
-  background-color: #ffffff !important;
+  background-color: #252526 !important;
+  color: #cccccc !important;
 }
 
 .monaco-editor .suggest-widget .monaco-list {
   min-width: 400px !important;
   min-height: 180px !important;
   max-height: 360px !important;
+  background-color: #252526 !important;
 }
 
 .monaco-editor .suggest-widget .monaco-list-rows {
@@ -111,16 +113,18 @@
   display: flex !important;
   align-items: center !important;
   padding: 0 8px !important;
+  color: #cccccc !important;
 }
 
 .monaco-editor .suggest-widget .monaco-list-row.focused {
-  background-color: #e0f2fe !important;
-  color: #0369a1 !important;
+  background-color: #04395e !important;
+  color: #ffffff !important;
 }
 
 .monaco-editor .suggest-widget .details {
-  border-left: 1px solid #e2e8f0 !important;
-  background-color: #f8fafc !important;
+  border-left: 1px solid #3c3c3c !important;
+  background-color: #1e1e1e !important;
+  color: #cccccc !important;
   min-width: 300px !important;
   max-width: 480px !important;
   padding: 10px 14px !important;
@@ -129,13 +133,14 @@
 .monaco-editor .parameter-hints-widget,
 .monaco-editor .monaco-hover {
   border-radius: 8px !important;
-  border: 1px solid #cbd5e1 !important;
-  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.08) !important;
+  border: 1px solid #3c3c3c !important;
+  box-shadow: 0 12px 28px -4px rgba(0, 0, 0, 0.45) !important;
   z-index: 99999 !important;
+  background-color: #252526 !important;
+  color: #cccccc !important;
 }
 
 .monaco-editor .parameter-hints-widget {
-  background-color: #ffffff !important;
   min-width: 340px !important;
   max-width: 640px !important;
   max-height: 280px !important;
@@ -145,7 +150,6 @@
 }
 
 .monaco-editor .monaco-hover {
-  background-color: #ffffff !important;
   min-width: 320px !important;
   max-width: 620px !important;
   max-height: 340px !important;
@@ -156,11 +160,11 @@
 
 /* Monaco Scrollbars */
 .monaco-editor .monaco-scrollable-element > .scrollbar > .slider {
-  background: #cbd5e1 !important;
+  background: #4e4e4e !important;
   border-radius: 4px !important;
 }
 
 .monaco-editor .monaco-scrollable-element > .scrollbar > .slider:hover,
 .monaco-editor .monaco-scrollable-element > .scrollbar > .slider.active {
-  background: #94a3b8 !important;
+  background: #6e6e6e !important;
 }
