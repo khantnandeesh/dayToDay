@@ -22,18 +22,31 @@ export const AuthProvider = ({ children }) => {
             const storedUser = localStorage.getItem('user');
 
             if (storedToken && storedUser) {
-                setToken(storedToken);
-                setUser(JSON.parse(storedUser));
-
-                // Verify token is still valid
                 try {
-                    const response = await api.get('/auth/me');
-                    setUser(response.data.user);
-                    localStorage.setItem('user', JSON.stringify(response.data.user));
-                } catch (error) {
-                    console.error('Token validation failed:', error);
+                    const parsedUser = JSON.parse(storedUser);
+                    setToken(storedToken);
+                    setUser(parsedUser);
+
+                    // Verify token is still valid with the server
+                    try {
+                        const response = await api.get('/auth/me');
+                        if (response.data?.user) {
+                            setUser(response.data.user);
+                            localStorage.setItem('user', JSON.stringify(response.data.user));
+                        }
+                    } catch (error) {
+                        console.error('Token validation failed:', error);
+                        if (error.response?.status === 401 || error.response?.status === 403) {
+                            logout();
+                        }
+                    }
+                } catch (e) {
+                    console.error('Error parsing cached user:', e);
                     logout();
                 }
+            } else {
+                setToken(null);
+                setUser(null);
             }
             setLoading(false);
         };

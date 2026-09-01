@@ -22,8 +22,16 @@ const vaultAuditLogSchema = new mongoose.Schema({
       'item_deleted',
       'vault_unlocked',
       'vault_locked',
+      'ai_session_created',
+      'ai_session_revoked',
+      'access_link_created',
+      'access_link_used',
+      'access_link_revoked',
     ],
     required: true,
+  },
+  details: {
+    type: String,
   },
   // Optional reference to affected item
   vaultItemId: {

@@ -29,9 +29,27 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+      const requestUrl = error.config?.url || '';
+      const isAuthEndpoint =
+        requestUrl.includes('/auth/login') ||
+        requestUrl.includes('/auth/register') ||
+        requestUrl.includes('/auth/verify-2fa') ||
+        requestUrl.includes('/auth/me');
+
+      const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
+      const isPublicPage =
+        currentPath === '/login' ||
+        currentPath === '/register' ||
+        currentPath === '/verify-2fa' ||
+        currentPath === '/security' ||
+        currentPath.startsWith('/share') ||
+        currentPath.startsWith('/vault/access');
+
+      if (!isAuthEndpoint && !isPublicPage) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }
