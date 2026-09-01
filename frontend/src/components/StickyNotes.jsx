@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { X, Check, Save, StickyNote, ChevronUp, ChevronDown } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { X, StickyNote, ChevronUp, ChevronDown } from 'lucide-react';
 
 const StickyNotes = () => {
     const [notes, setNotes] = useState(() => {

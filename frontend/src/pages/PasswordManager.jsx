@@ -5,7 +5,7 @@ import VaultDashboard from '../components/vault/VaultDashboard';
 import Navbar from '../components/Navbar';
 
 const PasswordManagerContent = () => {
-    const { isInitialized, isLocked, loading } = useVault();
+    const { isInitialized, isLocked } = useVault();
 
     // Initial loading state while checking status
     if (isInitialized === null) {

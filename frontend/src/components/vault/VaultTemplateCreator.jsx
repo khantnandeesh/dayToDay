@@ -91,17 +91,20 @@ const VaultTemplateCreator = ({ isOpen, onClose }) => {
                     <div>
                         <label className="block text-sm font-medium text-slate-700 mb-2">Icon</label>
                         <div className="flex flex-wrap gap-2">
-                            {ICONS.map(({ id, icon: Icon }) => (
-                                <button
-                                    key={id}
-                                    onClick={() => setSelectedIcon(id)}
-                                    className={`p-3 rounded-xl border transition-all ${selectedIcon === id
-                                        ? 'bg-slate-900 text-white border-slate-900 shadow-md'
-                                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}
-                                >
-                                    <Icon className="w-5 h-5" />
-                                </button>
-                            ))}
+                            {ICONS.map((item) => {
+                                const ItemIcon = item.icon;
+                                return (
+                                    <button
+                                        key={item.id}
+                                        onClick={() => setSelectedIcon(item.id)}
+                                        className={`p-3 rounded-xl border transition-all ${selectedIcon === item.id
+                                            ? 'bg-slate-900 text-white border-slate-900 shadow-md'
+                                            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}
+                                    >
+                                        <ItemIcon className="w-5 h-5" />
+                                    </button>
+                                );
+                            })}
                         </div>
                     </div>
 

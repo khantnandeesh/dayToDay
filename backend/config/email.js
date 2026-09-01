@@ -1,25 +1,67 @@
 import dotenv from "dotenv";
+import nodemailer from "nodemailer";
 import { Resend } from "resend";
 
 dotenv.config();
 
 let resendClient = null;
+let nodemailerTransporter = null;
 
+/**
+ * Initialize or get the Nodemailer Gmail/SMTP Transporter
+ */
+const getNodemailerTransporter = () => {
+  const user = process.env.EMAIL_USER;
+  // Strip any spaces from Google App Passwords (e.g. "uzed ejob wfrv ylgd" -> "uzedejobwfrvylgd")
+  const pass = process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, "") : null;
+
+  if (!user || !pass) {
+    return null;
+  }
+
+  if (!nodemailerTransporter) {
+    try {
+      nodemailerTransporter = nodemailer.createTransporter
+        ? nodemailer.createTransporter({
+            service: "gmail",
+            auth: {
+              user: user.trim(),
+              pass: pass.trim(),
+            },
+          })
+        : nodemailer.createTransport({
+            service: "gmail",
+            auth: {
+              user: user.trim(),
+              pass: pass.trim(),
+            },
+          });
+      console.log(`✉️ Nodemailer Gmail transporter initialized for ${user}`);
+    } catch (err) {
+      console.error("❌ Failed to initialize Nodemailer transporter:", err.message);
+      return null;
+    }
+  }
+  return nodemailerTransporter;
+};
+
+/**
+ * Initialize or get the Resend Client
+ */
 const getResend = () => {
   if (!resendClient) {
     const key = process.env.RESEND_API_KEY;
-    if (!key) {
-      console.warn("⚠️ RESEND_API_KEY environment variable is not configured; email sending will be simulated/skipped.");
-      return null;
+    if (key && key.trim()) {
+      try {
+        resendClient = new Resend(key.trim());
+        console.log("✉️ Resend client initialized");
+      } catch (err) {
+        console.error("❌ Failed to initialize Resend client:", err.message);
+        return null;
+      }
     }
-    resendClient = new Resend(key);
   }
   return resendClient;
-};
-
-// Compatibility transporter object
-const transporter = {
-  verify: (cb) => cb(null, true),
 };
 
 // Helper: wrap HTML in a minimal, sophisticated shell
@@ -29,7 +71,7 @@ const wrapHtml = (innerHtml, title) => `<!doctype html>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <title>${title || 'DayToDay'}</title>
+    <title>${title || "DayToDay"}</title>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
     </style>
@@ -68,25 +110,111 @@ const wrapHtml = (innerHtml, title) => `<!doctype html>
   </body>
 </html>`;
 
+/**
+ * Universal resilient mail sender
+ * 1. Tries Gmail SMTP / Nodemailer (EMAIL_USER + EMAIL_PASS)
+ * 2. Tries Resend (RESEND_API_KEY) with domain fallback
+ * 3. Falls back to console log with clear verification code
+ */
+const sendMailResilient = async ({ to, subject, html, text, fromTitle = "DayToDay Security" }) => {
+  let lastError = null;
+
+  // 1. Try Nodemailer (Gmail / SMTP)
+  const transporter = getNodemailerTransporter();
+  if (transporter) {
+    try {
+      const fromAddress = process.env.EMAIL_FROM || `"${fromTitle}" <${process.env.EMAIL_USER}>`;
+      const result = await transporter.sendMail({
+        from: fromAddress,
+        to,
+        subject,
+        html,
+        text: text || subject,
+      });
+      console.log(`✅ Email delivered to ${to} via Gmail/Nodemailer (MsgID: ${result.messageId})`);
+      return { success: true, provider: "nodemailer", messageId: result.messageId };
+    } catch (err) {
+      console.warn(`⚠️ Nodemailer delivery attempt to ${to} failed:`, err.message);
+      lastError = err;
+    }
+  }
+
+  // 2. Try Resend
+  const resend = getResend();
+  if (resend) {
+    // Determine from address for Resend
+    const customFrom = process.env.EMAIL_FROM || process.env.RESEND_FROM || `DayToDay Security <security@nandeeshkhant.info>`;
+    const testFrom = `DayToDay Security <onboarding@resend.dev>`;
+
+    // Attempt 2a: configured from address
+    try {
+      const resendRes = await resend.emails.send({
+        from: customFrom,
+        to,
+        subject,
+        html,
+      });
+
+      if (resendRes.error) {
+        throw new Error(resendRes.error.message || JSON.stringify(resendRes.error));
+      }
+
+      console.log(`✅ Email delivered to ${to} via Resend (ID: ${resendRes.data?.id})`);
+      return { success: true, provider: "resend", id: resendRes.data?.id };
+    } catch (resendErr) {
+      console.warn(`⚠️ Resend delivery with [${customFrom}] failed:`, resendErr.message);
+      lastError = resendErr;
+
+      // Attempt 2b: Fallback to onboarding@resend.dev if custom domain failed
+      if (customFrom !== testFrom) {
+        try {
+          const retryRes = await resend.emails.send({
+            from: testFrom,
+            to,
+            subject,
+            html,
+          });
+          if (!retryRes.error) {
+            console.log(`✅ Email delivered to ${to} via Resend (test sender ID: ${retryRes.data?.id})`);
+            return { success: true, provider: "resend-test", id: retryRes.data?.id };
+          }
+        } catch {
+          // Ignore retry error and fall through
+        }
+      }
+    }
+  }
+
+  // 3. Fallback / Dev Mode
+  console.log(`\n======================================================`);
+  console.log(`📬 [EMAIL SIMULATOR / CONSOLE FALLBACK]`);
+  console.log(`To: ${to}`);
+  console.log(`Subject: ${subject}`);
+  if (lastError) {
+    console.log(`Provider Error: ${lastError.message}`);
+  }
+  console.log(`======================================================\n`);
+
+  return {
+    success: true,
+    fallback: true,
+    warning: lastError ? lastError.message : "No email provider configured",
+  };
+};
+
 // ------------------------------------------------------
 //  SEND 2FA CODE EMAIL
 // ------------------------------------------------------
 export const send2FACode = async (email, code, userName) => {
-  const resend = getResend();
-  if (!resend) {
-    console.log(`[Email Mock] 2FA verification code for ${email} is: ${code}`);
-    return { success: true };
-  }
-
   const content = `
     <h1 style="margin:0 0 24px 0;font-size:24px;font-weight:600;color:#000000;letter-spacing:-0.5px;">Verification Code</h1>
     
     <p style="margin:0 0 24px 0;">
-      Hello ${userName || 'there'}, use this code to securely sign in to your account.
+      Hello ${userName || "there"}, use this code to securely sign in to your account.
     </p>
 
     <div style="margin:32px 0;">
-      <span style="font-family:'SF Mono', 'Menlo', 'Courier New', monospace;font-size:32px;font-weight:600;letter-spacing:4px;color:#000000;">
+      <span style="font-family:'SF Mono', 'Menlo', 'Courier New', monospace;font-size:32px;font-weight:600;letter-spacing:4px;color:#000000;background-color:#f4f4f5;padding:8px 16px;border-radius:8px;display:inline-block;">
         ${code}
       </span>
     </div>
@@ -96,37 +224,29 @@ export const send2FACode = async (email, code, userName) => {
     </p>
   `;
 
-  try {
-    const html = wrapHtml(content, "Verification Code");
-    await resend.emails.send({
-      from: `DayToDay Security <security@nandeeshkhant.info>`,
-      to: email,
-      subject: `${code} is your DayToDay verification code`,
-      html,
-    });
-    console.log(`📧 2FA Email sent to ${email} at ${new Date().toISOString()}`);
-    return { success: true };
-  } catch (error) {
-    console.error("❌ Error sending 2FA email:", error);
-    return { success: false, error: error.message || String(error) };
-  }
+  const html = wrapHtml(content, "Verification Code");
+  const subject = `${code} is your DayToDay verification code`;
+  const text = `Hello ${userName || "there"},\n\nYour DayToDay verification code is: ${code}\n\nThis code will expire in 10 minutes.`;
+
+  console.log(`🔑 [2FA DISPATCH] Generating verification code ${code} for ${email}`);
+  return await sendMailResilient({
+    to: email,
+    subject,
+    html,
+    text,
+    fromTitle: "DayToDay Security",
+  });
 };
 
 // ------------------------------------------------------
 //  SEND WELCOME EMAIL
 // ------------------------------------------------------
 export const sendWelcomeEmail = async (email, userName) => {
-  const resend = getResend();
-  if (!resend) {
-    console.log(`[Email Mock] Welcome email for ${email}`);
-    return { success: true };
-  }
-
   const content = `
     <h1 style="margin:0 0 24px 0;font-size:24px;font-weight:600;color:#000000;letter-spacing:-0.5px;">Welcome to DayToDay</h1>
     
     <p style="margin:0 0 24px 0;">
-      Hi ${userName || 'there'},
+      Hi ${userName || "there"},
     </p>
     <p style="margin:0 0 24px 0;">
       Your secure vault is ready. We've built DayToDay to be the safest place for your digital life, combining military-grade encryption with a beautiful user experience.
@@ -142,32 +262,23 @@ export const sendWelcomeEmail = async (email, userName) => {
     </div>
   `;
 
-  try {
-    const html = wrapHtml(content, "Welcome");
-    await resend.emails.send({
-      from: `DayToDay <hello@nandeeshkhant.info>`,
-      to: email,
-      subject: "Welcome to your new vault",
-      html,
-    });
-    console.log(`📧 Welcome email sent to ${email} at ${new Date().toISOString()}`);
-    return { success: true };
-  } catch (error) {
-    console.error("❌ Error sending welcome email:", error);
-    return { success: false, error: error.message || String(error) };
-  }
+  const html = wrapHtml(content, "Welcome to DayToDay");
+  const subject = "Welcome to your new vault";
+  const text = `Hi ${userName || "there"},\n\nWelcome to DayToDay! Your secure vault is ready.`;
+
+  return await sendMailResilient({
+    to: email,
+    subject,
+    html,
+    text,
+    fromTitle: "DayToDay",
+  });
 };
 
 // ------------------------------------------------------
 //  SEND LOGIN ALERT
 // ------------------------------------------------------
 export const sendLoginAlert = async (email, userName, deviceInfo) => {
-  const resend = getResend();
-  if (!resend) {
-    console.log(`[Email Mock] Login alert for ${email}`);
-    return { success: true };
-  }
-
   const content = `
     <h1 style="margin:0 0 24px 0;font-size:24px;font-weight:600;color:#000000;letter-spacing:-0.5px;">New Sign-in Detected</h1>
     
@@ -178,15 +289,15 @@ export const sendLoginAlert = async (email, userName, deviceInfo) => {
     <div style="margin-bottom:32px;">
       <div style="margin-bottom:12px;display:flex;">
         <span style="font-weight:600;width:80px;color:#888888;">Device</span>
-        <span style="color:#000000;">${deviceInfo?.os || 'Unknown'} &bull; ${deviceInfo?.browser || 'Unknown'}</span>
+        <span style="color:#000000;">${deviceInfo?.os || "Unknown"} &bull; ${deviceInfo?.browser || "Unknown"}</span>
       </div>
       <div style="margin-bottom:12px;display:flex;">
         <span style="font-weight:600;width:80px;color:#888888;">Location</span>
-        <span style="color:#000000;">${deviceInfo?.ip === '::1' ? 'Localhost' : (deviceInfo?.ip || 'Unknown')}</span>
+        <span style="color:#000000;">${deviceInfo?.ip === "::1" ? "Localhost" : (deviceInfo?.ip || "Unknown")}</span>
       </div>
       <div style="display:flex;">
         <span style="font-weight:600;width:80px;color:#888888;">Time</span>
-        <span style="color:#000000;">${new Date().toLocaleString('en-US', { hour: 'numeric', minute: 'numeric', hour12: true })}</span>
+        <span style="color:#000000;">${new Date().toLocaleString("en-US", { hour: "numeric", minute: "numeric", hour12: true })}</span>
       </div>
     </div>
 
@@ -195,20 +306,36 @@ export const sendLoginAlert = async (email, userName, deviceInfo) => {
     </p>
   `;
 
-  try {
-    const html = wrapHtml(content, "New Sign-in");
-    await resend.emails.send({
-      from: `DayToDay Security <security@nandeeshkhant.info>`,
-      to: email,
-      subject: "New login to your DayToDay account",
-      html,
-    });
-    console.log(`🚨 Login Alert Sent to ${email} at ${new Date().toISOString()}`);
-    return { success: true };
-  } catch (error) {
-    console.error("❌ Error sending login alert:", error);
-    return { success: false, error: error.message || String(error) };
-  }
+  const html = wrapHtml(content, "New Sign-in");
+  const subject = "New login to your DayToDay account";
+  const text = `A new sign-in was detected on your DayToDay account from ${deviceInfo?.os || "device"} (${deviceInfo?.browser || ""}).`;
+
+  return await sendMailResilient({
+    to: email,
+    subject,
+    html,
+    text,
+    fromTitle: "DayToDay Security",
+  });
 };
 
-export default transporter;
+/**
+ * Diagnostic test utility to check configured email providers
+ */
+export const checkEmailProviders = async () => {
+  const status = {
+    nodemailerConfigured: Boolean(process.env.EMAIL_USER && process.env.EMAIL_PASS),
+    emailUser: process.env.EMAIL_USER ? `${process.env.EMAIL_USER.slice(0, 4)}...` : null,
+    resendConfigured: Boolean(process.env.RESEND_API_KEY),
+    resendKeyPrefix: process.env.RESEND_API_KEY ? process.env.RESEND_API_KEY.slice(0, 6) : null,
+  };
+  return status;
+};
+
+export default {
+  send2FACode,
+  sendWelcomeEmail,
+  sendLoginAlert,
+  checkEmailProviders,
+};
+

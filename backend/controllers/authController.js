@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import Session from '../models/Session.js';
-import { send2FACode, sendWelcomeEmail, sendLoginAlert } from '../config/email.js';
+import { send2FACode, sendWelcomeEmail, sendLoginAlert, checkEmailProviders } from '../config/email.js';
 import { parseDeviceInfo } from '../utils/deviceParser.js';
 
 // Generate JWT token
@@ -109,13 +109,17 @@ export const login = async (req, res) => {
         const code = user.generate2FACode();
         await user.save();
 
-        await send2FACode(email, code, user.name);
+        const emailResult = await send2FACode(email, code, user.name);
 
         return res.status(200).json({
             success: true,
             message: '2FA code sent to your email',
             userId: user._id,
             requires2FA: true,
+            emailDelivery: {
+              provider: emailResult.provider || 'simulated',
+              fallback: Boolean(emailResult.fallback),
+            },
         });
     }
 
@@ -306,11 +310,15 @@ export const resend2FA = async (req, res) => {
     const code = user.generate2FACode();
     await user.save();
 
-    await send2FACode(user.email, code, user.name);
+    const emailResult = await send2FACode(user.email, code, user.name);
 
     res.status(200).json({
       success: true,
       message: 'New verification code sent to your email',
+      emailDelivery: {
+        provider: emailResult.provider || 'simulated',
+        fallback: Boolean(emailResult.fallback),
+      },
     });
   } catch (error) {
     console.error('Resend 2FA error:', error);
@@ -504,3 +512,52 @@ export const toggle2FA = async (req, res) => {
     });
   }
 };
+
+// @desc    Check email provider health status
+// @route   GET /api/auth/email-status
+// @access  Public
+export const getEmailStatus = async (req, res) => {
+  try {
+    const status = await checkEmailProviders();
+    res.status(200).json({
+      success: true,
+      status,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// @desc    Send test email to verify configuration
+// @route   POST /api/auth/test-email
+// @access  Public
+export const sendTestVerificationEmail = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide recipient email address',
+      });
+    }
+
+    const testCode = '123456';
+    const result = await send2FACode(email, testCode, 'Tester');
+
+    res.status(200).json({
+      success: true,
+      message: `Test email dispatched to ${email}`,
+      result,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+

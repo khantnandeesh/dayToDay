@@ -44,7 +44,6 @@ const VaultDashboard = () => {
         createItem,
         updateItem,
         deleteItem,
-        loading,
         customTemplates,
         mcpSession,
         isMcpAuthModalOpen,

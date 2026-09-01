@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
-    Shield, Key, Lock, Unlock, Clock, AlertCircle,
-    CheckCircle2, Copy, Check, Sparkles, X, RefreshCw, PowerOff
+    Shield, Key, Lock,
+    CheckCircle2, Copy, Check, Sparkles, X, RefreshCw, PowerOff, AlertCircle
 } from 'lucide-react';
 import { useVault } from '../../context/VaultContext';
 
@@ -29,11 +29,8 @@ const McpVaultAuthModal = ({ isOpen, onClose }) => {
     useEffect(() => {
         if (isOpen) {
             checkMcpSessionStatus();
-            setError('');
-            setSuccessMessage('');
-            setGeneratedToken(null);
         }
-    }, [isOpen]);
+    }, [isOpen, checkMcpSessionStatus]);
 
     if (!isOpen) return null;
 

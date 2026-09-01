@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import {
     ZoomIn, ZoomOut, RotateCw, Download, Printer, Search,
-    ChevronLeft, ChevronRight, Grid, X, Menu, Settings,
+    ChevronLeft, ChevronRight, X, Menu,
     Minimize, Maximize
 } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
@@ -35,10 +35,11 @@ const PDFViewer = ({ url, onClose, fileName = "Document.pdf" }) => {
     const zoomLevels = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
 
     useEffect(() => {
-        // Auto-fit width on load approx
         if (containerRef.current) {
-            const width = containerRef.current.clientWidth;
-            // setScale(width > 800 ? 1.0 : 0.6); // Simple heuristic
+            const containerWidth = containerRef.current.clientWidth;
+            if (containerWidth < 640) {
+                setScale(0.75);
+            }
         }
     }, []);
 

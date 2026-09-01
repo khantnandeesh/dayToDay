@@ -1,8 +1,9 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api from '../config/api';
 
 const AuthContext = createContext();
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => {
     const context = useContext(AuthContext);
     if (!context) {
@@ -15,6 +16,25 @@ export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
     const [token, setToken] = useState(localStorage.getItem('token'));
+
+    const logout = useCallback(() => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        setToken(null);
+        setUser(null);
+    }, []);
+
+    const login = useCallback((newToken, userData) => {
+        localStorage.setItem('token', newToken);
+        localStorage.setItem('user', JSON.stringify(userData));
+        setToken(newToken);
+        setUser(userData);
+    }, []);
+
+    const updateUser = useCallback((userData) => {
+        setUser(userData);
+        localStorage.setItem('user', JSON.stringify(userData));
+    }, []);
 
     useEffect(() => {
         const initAuth = async () => {
@@ -52,26 +72,7 @@ export const AuthProvider = ({ children }) => {
         };
 
         initAuth();
-    }, []);
-
-    const login = (token, userData) => {
-        localStorage.setItem('token', token);
-        localStorage.setItem('user', JSON.stringify(userData));
-        setToken(token);
-        setUser(userData);
-    };
-
-    const logout = () => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        setToken(null);
-        setUser(null);
-    };
-
-    const updateUser = (userData) => {
-        setUser(userData);
-        localStorage.setItem('user', JSON.stringify(userData));
-    };
+    }, [logout]);
 
     const value = {
         user,

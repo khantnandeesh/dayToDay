@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react';
 import Navbar from '../components/Navbar';
 import {
     HardDrive, Folder, FileText, Image as ImageIcon, Film,
-    MoreVertical, Download, Trash2, Plus, ArrowLeft, Search, Loader, Cloud, Share2, RotateCcw, Edit2, X, XCircle
+    Download, Trash2, Plus, ArrowLeft, Loader, Cloud, Share2, RotateCcw, Edit2, X, XCircle
 } from 'lucide-react';
 import api from '../config/api';
 import UploadProgress from '../components/drive/UploadProgress';
 import FilePreview from '../components/drive/FilePreview';
 import axios from 'axios';
+
+const getTimestamp = () => Date.now();
 
 const SecureDrive = () => {
     const [currentFolder, setCurrentFolder] = useState(null); // null = root
@@ -23,7 +25,6 @@ const SecureDrive = () => {
 
     // Upload Manager State
     const [uploads, setUploads] = useState([]);
-    const [isUploadPanelOpen, setIsUploadPanelOpen] = useState(true);
 
     // Usage stats
     const [usage, setUsage] = useState(0);
@@ -33,25 +34,17 @@ const SecureDrive = () => {
     const [preview, setPreview] = useState(null);
     const [previewCache, setPreviewCache] = useState({});
 
-    useEffect(() => {
-        fetchContent();
-    }, [currentFolder, viewTrash]);
-
     const fetchContent = async (forceRefresh = false) => {
         const cacheKey = `${viewTrash ? 'trash' : 'folder'}-${currentFolder || 'root'}`;
 
-        // 1. Try Cache (Fast Path)
         if (!forceRefresh && contentCache[cacheKey]) {
             const cached = contentCache[cacheKey];
             setFiles(cached.files);
             setFolders(cached.folders);
-            // Don't overwrite usage stats from cache to keep it fresh-ish, or do?
-            // Better to keep UI snappy.
             setLoading(false);
             return;
         }
 
-        // 2. Fetch API (Slow Path)
         setLoading(true);
         try {
             const params = { trash: viewTrash };
@@ -66,7 +59,6 @@ const SecureDrive = () => {
             if (res.data.usage !== undefined) setUsage(res.data.usage);
             if (res.data.total) setTotalQuota(res.data.total);
 
-            // 3. Update Cache
             setContentCache(prev => ({
                 ...prev,
                 [cacheKey]: { files: res.data.files, folders: res.data.folders }
@@ -79,6 +71,39 @@ const SecureDrive = () => {
         }
     };
 
+    useEffect(() => {
+        let isMounted = true;
+        const load = async () => {
+            setLoading(true);
+            try {
+                const params = { trash: viewTrash };
+                if (!viewTrash) {
+                    params.folderId = currentFolder || 'root';
+                }
+                const res = await api.get('/drive/content', { params });
+                if (!isMounted) return;
+
+                setFiles(res.data.files);
+                setFolders(res.data.folders);
+                if (res.data.usage !== undefined) setUsage(res.data.usage);
+                if (res.data.total) setTotalQuota(res.data.total);
+
+                const cacheKey = `${viewTrash ? 'trash' : 'folder'}-${currentFolder || 'root'}`;
+                setContentCache(prev => ({
+                    ...prev,
+                    [cacheKey]: { files: res.data.files, folders: res.data.folders }
+                }));
+            } catch (error) {
+                console.error("Error fetching drive content", error);
+            } finally {
+                if (isMounted) setLoading(false);
+            }
+        };
+
+        load();
+        return () => { isMounted = false; };
+    }, [currentFolder, viewTrash]);
+
     // Helper to invalidate cache on mutations
     const invalidateAndRefresh = () => {
         setContentCache({}); // Clear entire cache to ensure consistency
@@ -87,7 +112,7 @@ const SecureDrive = () => {
 
     const handleFolderClick = (folder) => {
         setFolderStack([...folderStack, folder]);
-        setCurrentFolder(folder.id); // Optimized navigation will now hit cache if available
+        setCurrentFolder(folder.id);
     };
 
     const handleBreadcrumbClick = (index) => {
@@ -102,7 +127,7 @@ const SecureDrive = () => {
         try {
             await api.post('/drive/folder', { name, parentId: currentFolder });
             invalidateAndRefresh();
-        } catch (error) {
+        } catch {
             alert("Failed to create folder");
         }
     };
@@ -124,7 +149,7 @@ const SecureDrive = () => {
         updateUpload(id, { status: 'uploading' });
 
         let lastLoaded = 0;
-        let lastTime = Date.now();
+        let lastTime = getTimestamp();
 
         try {
             // 1. Get Presigned URL
@@ -143,7 +168,7 @@ const SecureDrive = () => {
                 headers: { 'Content-Type': file.type || 'application/octet-stream' },
                 onUploadProgress: (progressEvent) => {
                     const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                    const now = Date.now();
+                    const now = getTimestamp();
                     const timeDiff = (now - lastTime) / 1000;
 
                     if (timeDiff >= 0.5) {
@@ -171,10 +196,8 @@ const SecureDrive = () => {
 
             updateUpload(id, { status: 'completed', progress: 100, speed: 'Complete' });
 
-            // Invalidate cache globaly to reflect storage usage and file list changes
             setContentCache({});
 
-            // Only force visual refresh if we are strictly watching the target folder
             if (targetFolderId === currentFolder) {
                 fetchContent(true);
             }
@@ -187,13 +210,11 @@ const SecureDrive = () => {
 
     const [isDragging, setIsDragging] = useState(false);
 
-    // ... (previous helper fns) ...
+    const processFiles = (fileList) => {
+        if (fileList.length === 0) return;
 
-    const processFiles = (files) => {
-        if (files.length === 0) return;
-
-        const newItems = files.map(file => ({
-            id: Math.random().toString(36).substr(2, 9),
+        const newItems = fileList.map(file => ({
+            id: Math.random().toString(36).substring(2, 11),
             file,
             name: file.name,
             progress: 0,
@@ -203,7 +224,6 @@ const SecureDrive = () => {
         }));
 
         setUploads(prev => [...newItems, ...prev]);
-        setIsUploadPanelOpen(true);
         newItems.forEach(item => processUpload(item));
     };
 
@@ -213,7 +233,6 @@ const SecureDrive = () => {
         event.target.value = null;
     };
 
-    // Drag & Drop Handlers
     const handleDragOver = (e) => {
         e.preventDefault();
         setIsDragging(true);
@@ -227,8 +246,8 @@ const SecureDrive = () => {
     const handleDrop = (e) => {
         e.preventDefault();
         setIsDragging(false);
-        const files = Array.from(e.dataTransfer.files);
-        processFiles(files);
+        const droppedFiles = Array.from(e.dataTransfer.files);
+        processFiles(droppedFiles);
     };
 
     const handleDelete = async (id, type) => {
@@ -236,7 +255,7 @@ const SecureDrive = () => {
         try {
             await api.post('/drive/delete', { id, type });
             invalidateAndRefresh();
-        } catch (error) {
+        } catch {
             alert("Failed to delete");
         }
     };
@@ -244,14 +263,13 @@ const SecureDrive = () => {
     const handleDownload = async (file) => {
         try {
             const res = await api.get(`/drive/file/${file._id}/url?download=true`);
-            // Create invisible link to trigger download
             const link = document.createElement('a');
             link.href = res.data.url;
-            link.setAttribute('download', file.name); // Hint to browser
+            link.setAttribute('download', file.name);
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-        } catch (error) {
+        } catch {
             alert("Failed to get download URL");
         }
     };
@@ -261,7 +279,7 @@ const SecureDrive = () => {
             const res = await api.post('/drive/share', { id });
             await navigator.clipboard.writeText(res.data.shareUrl);
             alert("Public link copied to clipboard!\n" + res.data.shareUrl);
-        } catch (error) {
+        } catch {
             alert("Share failed");
         }
     };
@@ -270,7 +288,7 @@ const SecureDrive = () => {
         try {
             await api.post('/drive/restore', { id, type });
             invalidateAndRefresh();
-        } catch (error) {
+        } catch {
             alert("Restore failed");
         }
     };
@@ -282,7 +300,7 @@ const SecureDrive = () => {
         try {
             await api.post('/drive/rename', { id, type, name: newName });
             invalidateAndRefresh();
-        } catch (error) {
+        } catch {
             alert("Rename failed");
         }
     };
@@ -292,7 +310,7 @@ const SecureDrive = () => {
         try {
             await api.post('/drive/delete-permanent', { id, type });
             invalidateAndRefresh();
-        } catch (error) {
+        } catch {
             alert("Permanent deletion failed");
         }
     };
@@ -303,31 +321,28 @@ const SecureDrive = () => {
             await api.post('/drive/revoke-share', { id });
             alert("Access revoked");
             invalidateAndRefresh();
-        } catch (error) {
+        } catch {
             alert("Failed to revoke access");
         }
     };
 
     const handlePreview = async (file) => {
-        // 1. Check Cache
+        const currentTime = getTimestamp();
         const cached = previewCache[file._id];
-        if (cached && cached.expiresAt > Date.now()) {
+        if (cached && cached.expiresAt > currentTime) {
             setPreview({ file, url: cached.url, loading: false });
             return;
         }
 
-        // Show loading immediately
         setPreview({ file, loading: true });
 
-        // 2. Fetch if stale/missing
         try {
             const res = await api.get(`/drive/file/${file._id}/url`);
             const url = res.data.url;
 
-            // Cache for 55 minutes (backend expires in 60m)
             setPreviewCache(prev => ({
                 ...prev,
-                [file._id]: { url, expiresAt: Date.now() + 55 * 60 * 1000 }
+                [file._id]: { url, expiresAt: getTimestamp() + 55 * 60 * 1000 }
             }));
 
             setPreview({ file, url, loading: false });

@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { X, Plus, Trash2, Save, RefreshCw, Copy, Check } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { X, Save, RefreshCw } from 'lucide-react';
 import { useVault } from '../../context/VaultContext';
 
 const TEMPLATES = {
@@ -44,24 +44,8 @@ const TEMPLATES = {
     }
 };
 
-const FIELD_TYPES = [
-    { value: 'text', label: 'Text' },
-    { value: 'password', label: 'Password' },
-    { value: 'email', label: 'Email' },
-    { value: 'url', label: 'URL' },
-    { value: 'textarea', label: 'Long Text' },
-    { value: 'number', label: 'Number' },
-    { value: 'date', label: 'Date' }
-];
-
 const VaultItemEditor = ({ isOpen, onClose, initialData, onSave }) => {
     const { customTemplates } = useVault();
-    const [title, setTitle] = useState('');
-    const [type, setType] = useState('website');
-    const [fields, setFields] = useState([]);
-    const [tags, setTags] = useState([]);
-    const [notes, setNotes] = useState('');
-    const [tagInput, setTagInput] = useState('');
 
     const allTemplates = useMemo(() => {
         const custom = (customTemplates || []).reduce((acc, t) => {
@@ -71,40 +55,45 @@ const VaultItemEditor = ({ isOpen, onClose, initialData, onSave }) => {
         return { ...TEMPLATES, ...custom };
     }, [customTemplates]);
 
-    useEffect(() => {
-        if (isOpen) {
-            if (initialData) {
-                // Edit mode
-                setTitle(initialData.title);
-                setType(initialData.type);
-                setFields(initialData.fields || []);
-                setTags(initialData.tags || []);
-                setNotes(initialData.notes || []);
-            } else {
-                // New mode
-                resetForm('website');
-            }
-        }
-    }, [isOpen, initialData]);
-
-    const resetForm = (newType) => {
-        setTitle('');
-        setType(newType);
-        // Ensure values are initialized even for custom templates
-        const newFields = (allTemplates[newType]?.fields || []).map(f => ({
+    const [prevInitialData, setPrevInitialData] = useState(initialData);
+    const [title, setTitle] = useState(initialData?.title || '');
+    const [type, setType] = useState(initialData?.type || 'website');
+    const [fields, setFields] = useState(() => {
+        if (initialData?.fields) return initialData.fields;
+        return (allTemplates['website']?.fields || []).map(f => ({
             label: f.label,
             type: f.type,
             value: f.value || ''
         }));
-        setFields(newFields);
-        setTags([]);
-        setNotes('');
-    };
+    });
+    const [tags, setTags] = useState(initialData?.tags || []);
+    const [notes, setNotes] = useState(initialData?.notes || '');
+    const [tagInput, setTagInput] = useState('');
+
+    if (initialData !== prevInitialData) {
+        setPrevInitialData(initialData);
+        if (initialData) {
+            setTitle(initialData.title || '');
+            setType(initialData.type || 'website');
+            setFields(initialData.fields || []);
+            setTags(initialData.tags || []);
+            setNotes(initialData.notes || '');
+        } else {
+            setTitle('');
+            setType('website');
+            setFields((allTemplates['website']?.fields || []).map(f => ({
+                label: f.label,
+                type: f.type,
+                value: f.value || ''
+            })));
+            setTags([]);
+            setNotes('');
+        }
+    }
 
     const handleTypeChange = (newType) => {
-        if (initialData) return; // Can't change type when editing (simplification)
+        if (initialData) return;
         setType(newType);
-        // Preserve title but reset fields
         const newFields = (allTemplates[newType]?.fields || []).map(f => ({
             label: f.label,
             type: f.type,
@@ -117,14 +106,6 @@ const VaultItemEditor = ({ isOpen, onClose, initialData, onSave }) => {
         const newFields = [...fields];
         newFields[index][key] = value;
         setFields(newFields);
-    };
-
-    const addField = () => {
-        setFields([...fields, { label: 'New Field', value: '', type: 'text' }]);
-    };
-
-    const removeField = (index) => {
-        setFields(fields.filter((_, i) => i !== index));
     };
 
     const generatePassword = (index) => {

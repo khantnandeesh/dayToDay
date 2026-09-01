@@ -1,0 +1,71 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-ci:
+    name: Backend CI (Lint, Check & Tests)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install root and workspace dependencies
+        run: npm ci || npm install
+
+      - name: Check backend syntax
+        run: |
+          node -c backend/index.js
+          node -c backend/config/email.js
+          node -c backend/controllers/authController.js
+          node -c backend/controllers/vaultController.js
+          node -c backend/controllers/driveController.js
+
+      - name: Run MCP compatibility checks
+        run: npm run test:mcp
+        env:
+          NODE_ENV: test
+          JWT_SECRET: test-jwt-secret-key-32-chars-long-min
+
+  frontend-ci:
+    name: Frontend CI (Lint & Build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install root and workspace dependencies
+        run: npm ci || npm install
+
+      - name: Run Frontend Linter
+        run: npm --workspace=frontend run lint
+
+      - name: Build Frontend Application
+        run: npm --workspace=frontend run build
+        env:
+          VITE_API_URL: /api

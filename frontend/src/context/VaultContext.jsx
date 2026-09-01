@@ -1,9 +1,10 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api from '../config/api';
-import { deriveKey, encryptSync, decryptSync, generateSalt, generateIV } from '../utils/crypto';
+import { deriveKey, encryptSync, decryptSync, generateSalt } from '../utils/crypto';
 
 const VaultContext = createContext();
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useVault = () => {
     const context = useContext(VaultContext);
     if (!context) {
@@ -28,12 +29,7 @@ export const VaultProvider = ({ children }) => {
     });
     const [isMcpAuthModalOpen, setIsMcpAuthModalOpen] = useState(false);
 
-    useEffect(() => {
-        checkVaultStatus();
-        checkMcpSessionStatus();
-    }, []);
-
-    const checkVaultStatus = async () => {
+    const checkVaultStatus = useCallback(async () => {
         try {
             const response = await api.get('/vault/status');
             setIsInitialized(response.data.isInitialized);
@@ -42,9 +38,9 @@ export const VaultProvider = ({ children }) => {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
-    const checkMcpSessionStatus = async () => {
+    const checkMcpSessionStatus = useCallback(async () => {
         try {
             const response = await api.get('/vault/mcp/session');
             if (response.data.success) {
@@ -58,7 +54,35 @@ export const VaultProvider = ({ children }) => {
         } catch (err) {
             console.error('Check MCP session status error:', err);
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        const init = async () => {
+            try {
+                const [vaultRes, mcpRes] = await Promise.allSettled([
+                    api.get('/vault/status'),
+                    api.get('/vault/mcp/session')
+                ]);
+                if (vaultRes.status === 'fulfilled') {
+                    setIsInitialized(vaultRes.value.data.isInitialized);
+                }
+                if (mcpRes.status === 'fulfilled' && mcpRes.value.data.success) {
+                    setMcpSession({
+                        isAuthorized: mcpRes.value.data.isAuthorized,
+                        expiresAt: mcpRes.value.data.expiresAt,
+                        remainingMinutes: mcpRes.value.data.remainingMinutes || 0,
+                        durationMinutes: mcpRes.value.data.durationMinutes || 15,
+                    });
+                }
+            } catch (err) {
+                console.error('Vault init error:', err);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        init();
+    }, []);
 
     const openMcpAuthModal = () => setIsMcpAuthModalOpen(true);
     const closeMcpAuthModal = () => setIsMcpAuthModalOpen(false);
@@ -176,7 +200,7 @@ export const VaultProvider = ({ children }) => {
             try {
                 const verification = await decryptSync(verifier, verifierIv, key);
                 if (verification.status !== 'valid') throw new Error('Invalid key');
-            } catch (decErr) {
+            } catch {
                 // Decryption failed = Wrong password
                 setError('Invalid Master Password');
                 setLoading(false);
@@ -338,6 +362,7 @@ export const VaultProvider = ({ children }) => {
         items,
         loading,
         error,
+        checkVaultStatus,
         mcpSession,
         isMcpAuthModalOpen,
         openMcpAuthModal,

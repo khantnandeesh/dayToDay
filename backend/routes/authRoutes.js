@@ -10,6 +10,8 @@ import {
   logoutDevice,
   logoutAllDevices,
   toggle2FA,
+  getEmailStatus,
+  sendTestVerificationEmail,
 } from '../controllers/authController.js';
 import { protect } from '../middleware/auth.js';
 
@@ -20,6 +22,8 @@ router.post('/register', register);
 router.post('/login', login);
 router.post('/verify-2fa', verify2FA);
 router.post('/resend-2fa', resend2FA);
+router.get('/email-status', getEmailStatus);
+router.post('/test-email', sendTestVerificationEmail);
 
 // Protected routes
 router.get('/me', protect, getMe);

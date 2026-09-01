@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { X, ChevronDown, ChevronUp, CheckCircle, AlertCircle, File, Minimize2, Maximize2 } from 'lucide-react';
+import { useState } from 'react';
+import { X, ChevronDown, ChevronUp, CheckCircle, AlertCircle, File } from 'lucide-react';
 
 const UploadProgress = ({ uploads, onClose }) => {
     const [isExpanded, setIsExpanded] = useState(true);
@@ -8,13 +8,6 @@ const UploadProgress = ({ uploads, onClose }) => {
     const totalFiles = uploads.length;
     const completed = uploads.filter(u => u.status === 'completed').length;
     const uploading = uploads.filter(u => u.status === 'uploading').length;
-    const progressSum = uploads.reduce((acc, curr) => acc + curr.progress, 0);
-    const overallProgress = totalFiles > 0 ? progressSum / totalFiles : 0;
-
-    // Radius for circular progress
-    const radius = 10;
-    const circumference = 2 * Math.PI * radius;
-    const strokeDashoffset = circumference - (overallProgress / 100) * circumference;
 
     if (uploads.length === 0) return null;
 

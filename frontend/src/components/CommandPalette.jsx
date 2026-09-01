@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
     Search, LayoutDashboard, Shield, HardDrive, User, LogOut,
-    Command, ArrowRight, FileText, Lock, Unlock, Sparkles, Key
+    ArrowRight, Lock, Sparkles
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useVault } from '../context/VaultContext';
@@ -16,6 +16,17 @@ const CommandPalette = ({ isOpen, onClose }) => {
     const { openMcpAuthModal, mcpSession } = useVault();
     const inputRef = useRef(null);
     const listRef = useRef(null);
+
+    const executeAction = useCallback((action) => {
+        if (!action) return;
+
+        onClose();
+        if (action.type === 'navigation') {
+            navigate(action.path);
+        } else if (action.type === 'action') {
+            action.action();
+        }
+    }, [navigate, onClose]);
 
     // Actions List
     const actions = [
@@ -92,17 +103,11 @@ const CommandPalette = ({ isOpen, onClose }) => {
         action.label.toLowerCase().includes(query.toLowerCase())
     );
 
-    // Reset selection when query changes
-    useEffect(() => {
-        setSelectedIndex(0);
-    }, [query]);
-
     // Focus input on open
     useEffect(() => {
         if (isOpen) {
-            setTimeout(() => inputRef.current?.focus(), 50);
-            setQuery('');
-            setSelectedIndex(0);
+            const timer = setTimeout(() => inputRef.current?.focus(), 50);
+            return () => clearTimeout(timer);
         }
     }, [isOpen]);
 
@@ -113,13 +118,15 @@ const CommandPalette = ({ isOpen, onClose }) => {
 
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                setSelectedIndex(prev => (prev + 1) % filteredActions.length);
+                setSelectedIndex(prev => (prev + 1) % (filteredActions.length || 1));
             } else if (e.key === 'ArrowUp') {
                 e.preventDefault();
-                setSelectedIndex(prev => (prev - 1 + filteredActions.length) % filteredActions.length);
+                setSelectedIndex(prev => (prev - 1 + (filteredActions.length || 1)) % (filteredActions.length || 1));
             } else if (e.key === 'Enter') {
                 e.preventDefault();
-                executeAction(filteredActions[selectedIndex]);
+                if (filteredActions[selectedIndex]) {
+                    executeAction(filteredActions[selectedIndex]);
+                }
             } else if (e.key === 'Escape') {
                 onClose();
             }
@@ -127,18 +134,7 @@ const CommandPalette = ({ isOpen, onClose }) => {
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, filteredActions, selectedIndex]);
-
-    const executeAction = (action) => {
-        if (!action) return;
-
-        onClose();
-        if (action.type === 'navigation') {
-            navigate(action.path);
-        } else if (action.type === 'action') {
-            action.action();
-        }
-    };
+    }, [isOpen, filteredActions, selectedIndex, executeAction, onClose]);
 
     if (!isOpen) return null;
 

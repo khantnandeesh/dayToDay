@@ -5,12 +5,15 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import mongoSanitize from 'express-mongo-sanitize';
 import xss from 'xss-clean';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 import connectDB from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
 import vaultRoutes from './routes/vaultRoutes.js';
 import driveRoutes from './routes/driveRoutes.js';
 import AllowedOrigin from './models/AllowedOrigin.js';
+import { checkEmailProviders } from './config/email.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   buildServer,
@@ -297,9 +300,11 @@ app.use('/api/drive', driveRoutes);
 
 // Health check
 app.get('/health', async (req, res) => {
+  const emailStatus = await checkEmailProviders();
   res.status(200).json({
     success: true,
     message: 'DayToDay Server is healthy and running',
+    email: emailStatus,
     mcp: {
       streamableEndpoint: '/mcp',
       sseEndpoint: '/mcp/sse',

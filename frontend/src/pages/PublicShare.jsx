@@ -14,7 +14,7 @@ const PublicShare = () => {
             try {
                 const res = await api.get(`/drive/public/${token}`);
                 setFile(res.data);
-            } catch (err) {
+            } catch {
                 setError("Link invalid or expired");
             } finally {
                 setLoading(false);

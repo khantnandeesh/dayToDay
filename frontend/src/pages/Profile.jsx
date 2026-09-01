@@ -17,10 +17,6 @@ const Profile = () => {
     const [actionLoading, setActionLoading] = useState(null);
     const [configLoading, setConfigLoading] = useState(false);
 
-    useEffect(() => {
-        fetchDevices();
-    }, []);
-
     const fetchDevices = async () => {
         try {
             const response = await api.get('/auth/devices');
@@ -33,6 +29,24 @@ const Profile = () => {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        let isMounted = true;
+        const load = async () => {
+            try {
+                const response = await api.get('/auth/devices');
+                if (isMounted && response.data.success) {
+                    setDevices(response.data.devices);
+                }
+            } catch (error) {
+                console.error('Error fetching devices:', error);
+            } finally {
+                if (isMounted) setLoading(false);
+            }
+        };
+        load();
+        return () => { isMounted = false; };
+    }, []);
 
     const handleToggle2FA = async () => {
         setConfigLoading(true);
