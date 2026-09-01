@@ -80,3 +80,35 @@
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: #6b7280; 
 }
+
+/* Monaco Editor IntelliSense, Suggestion, and Parameter Hints Styling */
+.monaco-editor .suggest-widget,
+.monaco-editor .parameter-hints-widget,
+.monaco-editor .monaco-hover {
+  border-radius: 8px !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.08) !important;
+  z-index: 99999 !important;
+}
+
+.monaco-editor .parameter-hints-widget {
+  background-color: #ffffff !important;
+  max-height: 280px !important;
+  overflow: auto !important;
+}
+
+.monaco-editor .monaco-hover {
+  max-height: 320px !important;
+  overflow: auto !important;
+}
+
+/* Monaco Scrollbars */
+.monaco-editor .monaco-scrollable-element > .scrollbar > .slider {
+  background: #cbd5e1 !important;
+  border-radius: 4px !important;
+}
+
+.monaco-editor .monaco-scrollable-element > .scrollbar > .slider:hover,
+.monaco-editor .monaco-scrollable-element > .scrollbar > .slider.active {
+  background: #94a3b8 !important;
+}

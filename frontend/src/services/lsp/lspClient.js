@@ -242,9 +242,44 @@ export class MonacoLspClient {
       });
   }
 
+  syncDocumentNow() {
+    if (!this.isInitialized || !this.editor) return;
+    const model = this.editor.getModel();
+    if (!model) return;
+
+    const currentText = model.getValue();
+    if (this.lastSyncedText === currentText) return;
+
+    if (this.changeDebounceTimer) {
+      clearTimeout(this.changeDebounceTimer);
+      this.changeDebounceTimer = null;
+    }
+
+    this.documentVersion++;
+    this.lastSyncedText = currentText;
+    this.send(
+      'textDocument/didChange',
+      {
+        textDocument: {
+          uri: this.documentUri,
+          version: this.documentVersion,
+        },
+        contentChanges: [
+          {
+            text: currentText,
+          },
+        ],
+      },
+      true
+    );
+  }
+
   bindDocument() {
     const model = this.editor.getModel();
     if (!model) return;
+
+    const initialText = model.getValue();
+    this.lastSyncedText = initialText;
 
     // Send didOpen notification
     this.send(
@@ -254,44 +289,35 @@ export class MonacoLspClient {
           uri: this.documentUri,
           languageId: this.config.monacoLanguage || 'python',
           version: this.documentVersion,
-          text: model.getValue(),
+          text: initialText,
         },
       },
       true
     );
 
-    // Track document changes
-    let changeDebounceTimer = null;
-    const contentDisposable = model.onDidChangeContent(() => {
+    // Track document changes with ultra-low latency
+    this.changeDebounceTimer = null;
+    const contentDisposable = model.onDidChangeContent((e) => {
       if (!this.isInitialized) return;
 
-      if (changeDebounceTimer) {
-        clearTimeout(changeDebounceTimer);
+      if (this.changeDebounceTimer) {
+        clearTimeout(this.changeDebounceTimer);
       }
 
-      changeDebounceTimer = setTimeout(() => {
-        this.documentVersion++;
-        this.send(
-          'textDocument/didChange',
-          {
-            textDocument: {
-              uri: this.documentUri,
-              version: this.documentVersion,
-            },
-            contentChanges: [
-              {
-                text: model.getValue(),
-              },
-            ],
-          },
-          true
-        );
-      }, 100);
+      // If typed trigger characters like '.' or '(', sync synchronously
+      const isTrigger = e.changes?.some((c) => ['.', '(', ')', '[', ']', '"', "'", ':', '\n'].includes(c.text));
+      if (isTrigger) {
+        this.syncDocumentNow();
+      } else {
+        this.changeDebounceTimer = setTimeout(() => {
+          this.syncDocumentNow();
+        }, 20);
+      }
     });
 
     this.disposables.push({
       dispose: () => {
-        if (changeDebounceTimer) clearTimeout(changeDebounceTimer);
+        if (this.changeDebounceTimer) clearTimeout(this.changeDebounceTimer);
         contentDisposable.dispose();
       },
     });
@@ -428,6 +454,8 @@ export class MonacoLspClient {
         provideCompletionItems: async (model, position, context) => {
           if (!this.isInitialized) return { suggestions: [] };
 
+          this.syncDocumentNow();
+
           try {
             const result = await this.send('textDocument/completion', {
               textDocument: { uri: this.documentUri },
@@ -515,6 +543,8 @@ export class MonacoLspClient {
       provideHover: async (model, position) => {
         if (!this.isInitialized) return null;
 
+        this.syncDocumentNow();
+
         try {
           const result = await this.send('textDocument/hover', {
             textDocument: { uri: this.documentUri },
@@ -566,6 +596,8 @@ export class MonacoLspClient {
         signatureHelpRetriggerCharacters: [','],
         provideSignatureHelp: async (model, position) => {
           if (!this.isInitialized) return null;
+
+          this.syncDocumentNow();
 
           try {
             const result = await this.send('textDocument/signatureHelp', {
