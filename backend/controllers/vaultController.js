@@ -632,7 +632,28 @@ export const accessVaultViaLink = async (req, res) => {
       }
     }
 
-    const payload = link.decryptedSnapshot || {};
+    let payload = link.decryptedSnapshot || null;
+
+    // Fallback: If snapshot was not saved at link creation time, attempt decryption via active session
+    if (!payload && link.vaultItemId) {
+      try {
+        const item = await VaultItem.findOne({ _id: link.vaultItemId, user: link.user });
+        if (item) {
+          const sessionResolved = resolveKeyForVaultAction(link.user, null, null);
+          const legacySession = getMcpVaultSession(link.user);
+          const activeKey = sessionResolved?.key || legacySession?.key;
+          if (activeKey) {
+            payload = decryptVaultBlobSync(item.encryptedData, item.iv, activeKey);
+          }
+        }
+      } catch (fbErr) {
+        console.warn('⚠️ Fallback decryption error on link open:', fbErr.message);
+      }
+    }
+
+    if (!payload) {
+      payload = {};
+    }
 
     // Normalize output fields
     let title = link.itemTitle || payload.title || 'Protected Item';
@@ -667,10 +688,10 @@ export const accessVaultViaLink = async (req, res) => {
       });
       emailSent = true;
     } catch (emailErr) {
-      console.warn('⚠️ Error sending credentials email:', emailErr.message);
+      console.error('❌ Error sending credentials email:', emailErr);
     }
 
-    // Burn link if one-time use
+    // Burn link if one-time use and email was successfully sent (or snapshot exists)
     if (link.oneTimeUse) {
       link.usedAt = new Date();
       await link.save();
