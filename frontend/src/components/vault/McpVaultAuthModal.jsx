@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-    Shield, Key, Lock,
+    Shield, Key, Lock, Unlock,
     CheckCircle2, Copy, Check, Sparkles, X, RefreshCw, PowerOff, AlertCircle
 } from 'lucide-react';
 import { useVault } from '../../context/VaultContext';
