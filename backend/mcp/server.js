@@ -14,6 +14,9 @@ import DriveFile from '../models/DriveFile.js';
 import DriveFolder from '../models/DriveFolder.js';
 import VaultSettings from '../models/VaultSettings.js';
 import VaultItem from '../models/VaultItem.js';
+import AIVaultSession from '../models/AIVaultSession.js';
+import VaultAccessLink from '../models/VaultAccessLink.js';
+import VaultAuditLog from '../models/VaultAuditLog.js';
 
 // Holds active SSE transports keyed by MCP sessionId so the POST
 // /mcp/messages endpoint can route client messages to the right server.
@@ -248,6 +251,11 @@ export function encryptVaultBlobSync(payloadObj, key) {
     encryptedData: combined.toString('base64'),
     iv: iv.toString('hex'),
   };
+}
+
+// Helper: hash a token for storage
+export function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }
 
 // ---------------------------------------------------------------------------
@@ -1485,6 +1493,77 @@ function buildServer(ctx) {
           },
         },
         required: ['itemId'],
+      },
+    },
+    {
+      name: 'get_ai_vault_session_info',
+      description:
+        'Get information about the current AI vault session, including expiration time and permissions.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'create_secure_vault_link',
+      description:
+        'Create a temporary secure link to access a specific vault item. The link expires and can only be used once.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          vaultItemId: {
+            type: 'string',
+            description: 'The ID of the vault item to create a link for.',
+          },
+          expiresInMinutes: {
+            type: 'number',
+            description: 'How long the link should be valid (default: 15 minutes, max: 60 minutes).',
+          },
+          oneTimeUse: {
+            type: 'boolean',
+            description: 'Whether the link can only be used once (default: true).',
+          },
+        },
+        required: ['vaultItemId'],
+      },
+    },
+    {
+      name: 'revoke_secure_vault_link',
+      description:
+        'Revoke a previously created secure vault link, making it invalid immediately.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          linkId: {
+            type: 'string',
+            description: 'The ID of the secure link to revoke.',
+          },
+        },
+        required: ['linkId'],
+      },
+    },
+    {
+      name: 'list_secure_vault_links',
+      description:
+        'List all active secure vault links created during the current AI session.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+    {
+      name: 'access_vault_item_via_link',
+      description:
+        'Access a vault item using a secure link token. This does not require full vault session authentication.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          linkToken: {
+            type: 'string',
+            description: 'The secure link token received from create_secure_vault_link.',
+          },
+        },
+        required: ['linkToken'],
       },
     },
   ];
@@ -2933,6 +3012,256 @@ function buildServer(ctx) {
             success: true,
             itemId: item._id,
             isFavorite: item.isFavorite,
+          });
+        }
+
+        // -------------------------------------------------------------------
+        // 4. AI Vault Session & Secure Link Tools
+        // -------------------------------------------------------------------
+        case 'request_ai_vault_authorization': {
+          const { permissions, allowedItemIds, durationMinutes } = args || {};
+          const baseUrl = process.env.FRONTEND_URL || process.env.BACKEND_URL || 'http://localhost:3000';
+          const authUrl = `${baseUrl}/vault/authorize-ai-session`;
+
+          return jsonResult({
+            success: true,
+            requiresUserAuthorization: true,
+            authorizationUrl: authUrl,
+            expiresIn: 300,
+            requestedPermissions: permissions || {
+              listItems: true,
+              readMetadata: true,
+              createSecureLink: true,
+              revealSecret: false,
+              createItems: false,
+              updateItems: false,
+              deleteItems: false,
+            },
+            requestedDuration: Math.min(durationMinutes || 30, 120),
+            requestedAllowedItems: allowedItemIds || null,
+            message: 'Please open the authorization URL in the DayToDay web app to securely authorize this AI session. Do NOT share your master password here.',
+          });
+        }
+
+        case 'get_ai_vault_session_info': {
+          const sessions = await AIVaultSession.find({
+            user: ctx.userId,
+            expiresAt: { $gt: new Date() },
+            revoked: false,
+          }).sort({ createdAt: -1 });
+
+          const activeSession = getMcpVaultSession(ctx.userId);
+
+          return jsonResult({
+            success: true,
+            legacyInMemorySession: activeSession ? {
+              expiresAt: new Date(activeSession.expiresAt).toISOString(),
+              remainingMinutes: Math.max(0, Math.ceil((activeSession.expiresAt - Date.now()) / (60 * 1000))),
+            } : null,
+            capabilitySessions: sessions.map(s => ({
+              id: s._id,
+              permissions: s.permissions,
+              allowedItemIds: s.allowedItemIds?.length ? s.allowedItemIds : 'all items',
+              expiresAt: s.expiresAt,
+              remainingMinutes: Math.max(0, Math.ceil((s.expiresAt - Date.now()) / (60 * 1000))),
+            })),
+            totalActive: sessions.length,
+          });
+        }
+
+        case 'create_secure_vault_link': {
+          const { vaultItemId, expiresInMinutes = 5, oneTimeUse = true } = args || {};
+          if (!vaultItemId) throw new Error('vaultItemId is required');
+
+          // Verify item belongs to user
+          const item = await VaultItem.findOne({ _id: vaultItemId, user: ctx.userId });
+          if (!item) throw new Error('Vault item not found or does not belong to you.');
+
+          // Check session permission
+          const activeSession = await AIVaultSession.findOne({
+            user: ctx.userId,
+            expiresAt: { $gt: new Date() },
+            revoked: false,
+          }).sort({ createdAt: -1 });
+
+          if (!activeSession) {
+            return jsonResult({
+              success: false,
+              status: 'requires_vault_authorization',
+              message: 'No active AI Vault Session. Please authorize a session first via the DayToDay web modal.',
+            }, true);
+          }
+
+          if (!activeSession.permissions.createSecureLink) {
+            return jsonResult({
+              success: false,
+              error: 'Current session does not have permission to create secure links.',
+            }, true);
+          }
+
+          // Check allowed items
+          if (activeSession.allowedItemIds?.length > 0 && !activeSession.allowedItemIds.includes(vaultItemId)) {
+            return jsonResult({
+              success: false,
+              error: 'This item is not in the allowed items list for this session.',
+            }, true);
+          }
+
+          // Generate opaque token
+          const linkToken = `vault_access_${crypto.randomBytes(24).toString('hex')}`;
+          const tokenHash = hashToken(linkToken);
+          const expiresAt = new Date(Date.now() + Math.min(expiresInMinutes, 15) * 60 * 1000);
+
+          const link = await VaultAccessLink.create({
+            user: ctx.userId,
+            vaultItemId,
+            tokenHash,
+            expiresAt,
+            oneTimeUse,
+            createdBySessionId: activeSession._id,
+          });
+
+          // Audit log
+          await VaultAuditLog.create({
+            user: ctx.userId,
+            action: 'link_created',
+            vaultItemId,
+            accessLinkId: link._id,
+            sessionId: activeSession._id,
+            metadata: {
+              source: 'mcp',
+              details: `Link created, expires in ${Math.min(expiresInMinutes, 15)} min, oneTimeUse: ${oneTimeUse}`,
+            },
+          });
+
+          const baseUrl = process.env.FRONTEND_URL || process.env.BACKEND_URL || 'http://localhost:3000';
+
+          return jsonResult({
+            success: true,
+            url: `${baseUrl}/vault/access/${linkToken}`,
+            expiresInSeconds: Math.min(expiresInMinutes, 15) * 60,
+            oneTimeUse,
+            linkId: link._id,
+            itemId: vaultItemId,
+          });
+        }
+
+        case 'revoke_secure_vault_link': {
+          const { linkId } = args || {};
+          if (!linkId) throw new Error('linkId is required');
+
+          const link = await VaultAccessLink.findOne({ _id: linkId, user: ctx.userId });
+          if (!link) throw new Error('Secure link not found or does not belong to you.');
+
+          if (link.usedAt) {
+            return jsonResult({
+              success: false,
+              error: 'This link has already been used or revoked.',
+            }, true);
+          }
+
+          link.usedAt = new Date();
+          await link.save();
+
+          // Audit log
+          await VaultAuditLog.create({
+            user: ctx.userId,
+            action: 'link_revoked',
+            vaultItemId: link.vaultItemId,
+            accessLinkId: link._id,
+            metadata: { source: 'mcp', details: 'Link manually revoked' },
+          });
+
+          return jsonResult({
+            success: true,
+            message: 'Secure vault access link revoked successfully.',
+            linkId,
+          });
+        }
+
+        case 'list_secure_vault_links': {
+          const links = await VaultAccessLink.find({
+            user: ctx.userId,
+            expiresAt: { $gt: new Date() },
+          }).sort({ createdAt: -1 });
+
+          const activeLinks = links.filter(l => !l.usedAt).map(l => ({
+            id: l._id,
+            vaultItemId: l.vaultItemId,
+            expiresAt: l.expiresAt,
+            oneTimeUse: l.oneTimeUse,
+            createdAt: l.createdAt,
+            createdBySessionId: l.createdBySessionId,
+          }));
+
+          const usedLinks = links.filter(l => l.usedAt).map(l => ({
+            id: l._id,
+            vaultItemId: l.vaultItemId,
+            usedAt: l.usedAt,
+            createdAt: l.createdAt,
+          }));
+
+          return jsonResult({
+            success: true,
+            activeLinks,
+            usedOrExpiredLinks: usedLinks,
+            totalActive: activeLinks.length,
+          });
+        }
+
+        case 'access_vault_item_via_link': {
+          const { linkToken } = args || {};
+          if (!linkToken) throw new Error('linkToken is required');
+
+          const tokenHash = hashToken(linkToken);
+          const link = await VaultAccessLink.findOne({
+            tokenHash,
+            expiresAt: { $gt: new Date() },
+          });
+
+          if (!link) {
+            return jsonResult({
+              success: false,
+              error: 'Invalid, expired, or already-used access link.',
+            }, true);
+          }
+
+          if (link.usedAt && link.oneTimeUse) {
+            return jsonResult({
+              success: false,
+              error: 'This one-time access link has already been used.',
+            }, true);
+          }
+
+          // Mark as used
+          if (link.oneTimeUse) {
+            link.usedAt = new Date();
+            await link.save();
+          }
+
+          // Fetch the vault item
+          const item = await VaultItem.findOne({ _id: link.vaultItemId, user: link.user });
+          if (!item) {
+            return jsonResult({ success: false, error: 'Vault item not found.' }, true);
+          }
+
+          // Audit log
+          await VaultAuditLog.create({
+            user: link.user,
+            action: 'link_used',
+            vaultItemId: link.vaultItemId,
+            accessLinkId: link._id,
+            metadata: { source: 'mcp', details: 'Item accessed via secure link' },
+          });
+
+          // Return only safe metadata - never the decrypted secret
+          return jsonResult({
+            success: true,
+            id: item._id,
+            type: item.type,
+            isFavorite: item.isFavorite,
+            updatedAt: item.updatedAt,
+            note: 'To view the decrypted password, open the DayToDay vault UI and unlock with your master password.',
           });
         }
 
