@@ -205,3 +205,34 @@
 .monaco-editor .monaco-scrollable-element > .scrollbar > .slider.active {
   background: #525252 !important;
 }
+
+/* Monaco Execution Error Line Highlighting */
+.monaco-editor .error-line-highlight {
+  background: rgba(239, 68, 68, 0.18) !important;
+  border-bottom: 2px wavy #ef4444 !important;
+}
+
+.monaco-editor .error-line-flash {
+  animation: errorLineFlash 2.5s ease-out forwards;
+}
+
+@keyframes errorLineFlash {
+  0% {
+    background: rgba(239, 68, 68, 0.45) !important;
+  }
+  50% {
+    background: rgba(239, 68, 68, 0.28) !important;
+  }
+  100% {
+    background: rgba(239, 68, 68, 0.16) !important;
+  }
+}
+
+.monaco-editor .error-glyph-margin {
+  background: #ef4444 !important;
+  border-radius: 50% !important;
+  width: 8px !important;
+  height: 8px !important;
+  margin-left: 5px !important;
+  margin-top: 5px !important;
+}
