@@ -4,6 +4,10 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const connectDB = async () => {
+  if (!process.env.MONGODB_URI) {
+    console.warn('⚠️ MONGODB_URI is not configured in environment. Database features will be limited.');
+    return;
+  }
   try {
     const conn = await mongoose.connect(process.env.MONGODB_URI, {
       useNewUrlParser: true,
@@ -12,8 +16,8 @@ const connectDB = async () => {
 
     console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
   } catch (error) {
-    console.error(`❌ Error connecting to MongoDB: ${error.message}`);
-    process.exit(1);
+    console.error(`⚠️ Error connecting to MongoDB: ${error.message}`);
+    console.warn('Server will continue running with degraded database features.');
   }
 };
 

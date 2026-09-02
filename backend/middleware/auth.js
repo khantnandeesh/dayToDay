@@ -69,3 +69,44 @@ export const protect = async (req, res, next) => {
     });
   }
 };
+
+export const optionalProtect = async (req, res, next) => {
+  try {
+    let token;
+    if (
+      req.headers.authorization &&
+      req.headers.authorization.startsWith('Bearer')
+    ) {
+      token = req.headers.authorization.split(' ')[1];
+    } else if (req.cookies.token) {
+      token = req.cookies.token;
+    }
+
+    if (!token) {
+      return next();
+    }
+
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const session = await Session.findOne({
+        token,
+        userId: decoded.id,
+        isActive: true,
+      });
+
+      if (session && session.isValid()) {
+        const user = await User.findById(decoded.id).select('-password');
+        if (user && user.isActive) {
+          req.user = user;
+          req.session = session;
+          req.token = token;
+        }
+      }
+    } catch {
+      // Non-fatal for optional auth
+    }
+    next();
+  } catch {
+    next();
+  }
+};

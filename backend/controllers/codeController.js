@@ -7,7 +7,7 @@ import { executeCode, SUPPORTED_LANGUAGES } from '../services/execution/codeExec
  */
 export const runCode = async (req, res) => {
   try {
-    const { language = 'python', code, input } = req.body;
+    const { language = 'python', code, input, timeout } = req.body;
 
     if (!code || typeof code !== 'string') {
       return res.status(400).json({
@@ -16,7 +16,7 @@ export const runCode = async (req, res) => {
       });
     }
 
-    const result = await executeCode({ language, code, input });
+    const result = await executeCode({ language, code, input, timeout });
 
     return res.status(200).json({
       success: result.success,

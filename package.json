@@ -2,11 +2,17 @@
   "name": "daytoday-app",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
   "scripts": {
-    "dev": "npm --prefix frontend run dev",
+    "dev": "node scripts/dev.js",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "PORT=5000 node backend/index.js",
     "lint": "npm --prefix frontend run lint",
     "start": "node backend/index.js",
-    "build": "node -e 'console.log(\"Backend build complete\")'",
+    "build": "npm --prefix frontend run build",
     "heroku-postbuild": "node -e 'console.log(\"Backend ready\")'",
     "test:mcp": "node backend/tests/mcp-compatibility.mjs"
   },

@@ -355,6 +355,16 @@ const server = http.createServer(app);
 // Attach Language Server Manager WebSocket server
 languageServerManager.attach(server);
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.warn(`⚠️ Port ${PORT} is already in use by an existing process.`);
+    process.exit(0);
+  } else {
+    console.error('Server listen error:', err);
+    process.exit(1);
+  }
+});
+
 server.listen(PORT, () => {
   console.log(`\n🚀 DayToDay Server running on port ${PORT}`);
   console.log(`📡 Backend URL: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);

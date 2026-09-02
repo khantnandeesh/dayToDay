@@ -17,6 +17,7 @@ import VaultItem from '../models/VaultItem.js';
 import AIVaultSession from '../models/AIVaultSession.js';
 import VaultAccessLink from '../models/VaultAccessLink.js';
 import VaultAuditLog from '../models/VaultAuditLog.js';
+import { executeCode } from '../services/execution/codeExecutionService.js';
 
 // Holds active SSE transports keyed by MCP sessionId so the POST
 // /mcp/messages endpoint can route client messages to the right server.
@@ -1595,6 +1596,52 @@ function buildServer(ctx) {
         required: ['linkToken'],
       },
     },
+    {
+      name: 'python_code_execution',
+      description:
+        'Execute Python source code with optional standard input (stdin) and receive stdout, stderr, exitCode, and executionTime. Simple, fast, and secure code execution tool.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          code: {
+            type: 'string',
+            description: 'Required. The Python source code to execute.',
+          },
+          input: {
+            type: 'string',
+            description: 'Optional. Standard input (stdin) text to pass to the script.',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Optional. Execution timeout limit in seconds (default: 15, max: 30).',
+          },
+        },
+        required: ['code'],
+      },
+    },
+    {
+      name: 'execute_python_code',
+      description:
+        'Execute Python source code with optional standard input (stdin) and receive output. Alias for python_code_execution.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          code: {
+            type: 'string',
+            description: 'Required. The Python source code to execute.',
+          },
+          input: {
+            type: 'string',
+            description: 'Optional. Standard input (stdin) text to pass to the script.',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Optional. Execution timeout limit in seconds (default: 15, max: 30).',
+          },
+        },
+        required: ['code'],
+      },
+    },
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
@@ -1602,8 +1649,13 @@ function buildServer(ctx) {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
-    // Tools require an authenticated user.
-    if (!ctx.userId) {
+    const isCodeExecutionTool =
+      name === 'python_code_execution' ||
+      name === 'execute_python_code' ||
+      name === 'pythocodeexection';
+
+    // Tools require an authenticated user, except general utility tools like code execution
+    if (!ctx.userId && !isCodeExecutionTool) {
       return jsonResult(
         { success: false, error: 'Not authenticated' },
         true
@@ -1612,6 +1664,35 @@ function buildServer(ctx) {
 
     try {
       switch (name) {
+        // -------------------------------------------------------------------
+        // 0. Code Execution Tools
+        // -------------------------------------------------------------------
+        case 'python_code_execution':
+        case 'execute_python_code':
+        case 'pythocodeexection': {
+          const { code, input = '', timeout = 15 } = args || {};
+          if (!code || typeof code !== 'string') {
+            return jsonResult(
+              { success: false, error: 'code is required and must be a string' },
+              true
+            );
+          }
+          const result = await executeCode({
+            language: 'python',
+            code,
+            input: typeof input === 'string' ? input : String(input || ''),
+            timeout: Math.min(Math.max(Number(timeout) || 15, 1), 30),
+          });
+          return jsonResult({
+            success: result.success,
+            output: result.output || '',
+            error: result.error || '',
+            exitCode: result.exitCode,
+            executionTime: result.executionTime,
+            compiler: result.compiler,
+          });
+        }
+
         // -------------------------------------------------------------------
         // 1. Account & Security
         // -------------------------------------------------------------------
