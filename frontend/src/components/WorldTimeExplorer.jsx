@@ -9,16 +9,16 @@ import {
   Sun,
   Moon,
   Briefcase,
-  Navigation,
-  Clock,
+  Compass,
   ArrowRightLeft,
-  Sparkles,
   Calendar,
+  Activity,
+  Maximize2,
 } from 'lucide-react';
 
 const WorldTimeExplorer = () => {
   const [viewMode, setViewMode] = useState('globe'); // 'globe' | 'map'
-  const [is24Hour, setIs24Hour] = useState(false);
+  const [is24Hour, setIs24Hour] = useState(true);
   const [selectedContinent, setSelectedContinent] = useState('all');
   const [selectedCity, setSelectedCity] = useState(
     () => WORLD_CITIES.find((c) => c.id === 'tokyo') || WORLD_CITIES[0]
@@ -27,11 +27,11 @@ const WorldTimeExplorer = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [now, setNow] = useState(new Date());
 
-  // Live timer tick every 1000ms
+  // High-frequency tick for smooth chronometer (100ms interval for precision)
   useEffect(() => {
     const timer = setInterval(() => {
       setNow(new Date());
-    }, 1000);
+    }, 100);
     return () => clearInterval(timer);
   }, []);
 
@@ -40,12 +40,15 @@ const WorldTimeExplorer = () => {
     return WORLD_CITIES.filter((city) => {
       const matchContinent =
         selectedContinent === 'all' || city.continent === selectedContinent;
+      const q = searchQuery.trim().toLowerCase();
       const matchSearch =
-        searchQuery.trim() === '' ||
-        city.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        city.country.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        city.continent.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        city.timezone.toLowerCase().includes(searchQuery.toLowerCase());
+        q === '' ||
+        city.name.toLowerCase().includes(q) ||
+        city.country.toLowerCase().includes(q) ||
+        city.code.toLowerCase().includes(q) ||
+        city.iata.toLowerCase().includes(q) ||
+        city.continent.toLowerCase().includes(q) ||
+        city.timezone.toLowerCase().includes(q);
       return matchContinent && matchSearch;
     });
   }, [selectedContinent, searchQuery]);
@@ -55,10 +58,15 @@ const WorldTimeExplorer = () => {
     return getTimeInfo(selectedCity.timezone, now);
   }, [selectedCity, now]);
 
-  // User's own local time for direct comparison
+  // Local device time
   const userLocalTimeInfo = useMemo(() => {
     const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     return getTimeInfo(localTz, now);
+  }, [now]);
+
+  // Master UTC Zulu time
+  const utcTimeInfo = useMemo(() => {
+    return getTimeInfo('UTC', now);
   }, [now]);
 
   // Handle city selection
@@ -80,86 +88,94 @@ const WorldTimeExplorer = () => {
         lat: continentObj.centerLat,
         lng: continentObj.centerLng,
       });
-      // Also select the first city in this continent
-      const firstCityInContinent = WORLD_CITIES.find(
-        (c) => c.continent === continentId
-      );
-      if (firstCityInContinent) {
-        setSelectedCity(firstCityInContinent);
+      const firstCity = WORLD_CITIES.find((c) => c.continent === continentId);
+      if (firstCity) {
+        setSelectedCity(firstCity);
       }
     }
   };
 
+  // Calculate 24-hour dial hand rotation angle (0 to 360 deg)
+  const dialAngle =
+    ((activeTimeInfo.hour * 3600 +
+      activeTimeInfo.minute * 60 +
+      activeTimeInfo.second) /
+      86400) *
+    360;
+
   return (
-    <div className="w-full bg-white rounded-3xl border border-slate-200/80 shadow-sm overflow-hidden mb-8">
-      {/* Top Header Bar */}
-      <div className="p-6 md:p-8 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+    <div className="w-full bg-slate-900 rounded-3xl border border-slate-800 shadow-xl overflow-hidden text-slate-100 font-sans">
+      {/* Top Cockpit Header Bar */}
+      <div className="p-5 md:p-6 border-b border-slate-800/80 flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-950/60">
         <div>
-          <div className="flex items-center gap-2 text-indigo-600 font-semibold text-xs tracking-wider uppercase mb-1">
-            <Sparkles className="w-4 h-4" />
-            <span>Interactive Continental Clock & Planetary Map</span>
+          <div className="flex items-center gap-2 text-cyan-400 font-mono text-[11px] uppercase tracking-wider font-semibold">
+            <Activity className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Planetary Time Synchronizer & 3D Celestial Globe</span>
           </div>
-          <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">
-            World Time & 3D Globe
+          <h2 className="text-xl md:text-2xl font-bold tracking-tight text-white mt-0.5">
+            World Chronometer
           </h2>
-          <p className="text-slate-500 text-sm mt-1">
-            Rotate the 3D globe, explore planetary time zones, or click any continent point for live local time.
-          </p>
         </div>
 
-        {/* View Mode & Time Format Controls */}
+        {/* Global Controls & Master Zulu Reference */}
         <div className="flex flex-wrap items-center gap-3">
+          {/* UTC Zulu Reference Bar */}
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono">
+            <span className="text-slate-400 text-[10px]">ZULU:</span>
+            <strong className="text-cyan-400 font-bold tracking-wider">
+              {utcTimeInfo.time24} Z
+            </strong>
+          </div>
+
+          {/* Local Device Sync */}
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-slate-400 text-[10px]">LOCAL:</span>
+            <strong className="text-slate-200 font-bold">
+              {is24Hour ? userLocalTimeInfo.time24 : userLocalTimeInfo.time}
+            </strong>
+          </div>
+
           {/* 3D Globe vs 2D Map Toggle */}
-          <div className="inline-flex p-1 rounded-xl bg-slate-100 border border-slate-200 text-xs font-semibold">
+          <div className="inline-flex p-1 rounded-xl bg-slate-950 border border-slate-800 text-xs font-semibold">
             <button
               onClick={() => setViewMode('globe')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
                 viewMode === 'globe'
-                  ? 'bg-white text-indigo-600 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+                  ? 'bg-cyan-950 text-cyan-400 border border-cyan-800/60 shadow-xs'
+                  : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <Globe className="w-4 h-4" />
-              <span>3D Globe</span>
+              <Globe className="w-3.5 h-3.5" />
+              <span>3D Planet</span>
             </button>
             <button
               onClick={() => setViewMode('map')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
                 viewMode === 'map'
-                  ? 'bg-white text-indigo-600 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+                  ? 'bg-cyan-950 text-cyan-400 border border-cyan-800/60 shadow-xs'
+                  : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              <MapIcon className="w-4 h-4" />
-              <span>2D Map</span>
+              <MapIcon className="w-3.5 h-3.5" />
+              <span>2D Grid</span>
             </button>
           </div>
 
-          {/* 12h / 24h Toggle */}
+          {/* 24h / 12h Toggle */}
           <button
             onClick={() => setIs24Hour(!is24Hour)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200/80 border border-slate-200 text-xs font-semibold text-slate-700 transition-colors"
-            title="Toggle between 12-hour and 24-hour time format"
+            className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800 text-xs font-mono text-slate-300 transition-colors"
           >
-            <Clock className="w-3.5 h-3.5 text-slate-500" />
-            <span>{is24Hour ? '24h Military' : '12h AM/PM'}</span>
+            {is24Hour ? '24H MIL' : '12H STD'}
           </button>
-
-          {/* User's local time chip */}
-          <div className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-xl bg-indigo-50/70 border border-indigo-100 text-xs text-indigo-900 font-medium">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Your Device:</span>
-            <strong className="font-mono font-bold">
-              {is24Hour ? userLocalTimeInfo.time24 : userLocalTimeInfo.time}
-            </strong>
-          </div>
         </div>
       </div>
 
-      {/* Continents Navigation Filter */}
-      <div className="px-6 md:px-8 py-3 bg-slate-50/60 border-b border-slate-100 flex items-center gap-2 overflow-x-auto scrollbar-none">
-        <span className="text-xs font-semibold text-slate-400 shrink-0 mr-1">
-          Continents:
+      {/* Minimalist Regional Filter Strip */}
+      <div className="px-5 md:px-6 py-2.5 bg-slate-950/40 border-b border-slate-800/80 flex items-center gap-2 overflow-x-auto scrollbar-none font-mono text-xs">
+        <span className="text-[10px] text-slate-400 tracking-wider uppercase mr-1">
+          REGION:
         </span>
         {CONTINENTS.map((continent) => {
           const isActive = selectedContinent === continent.id;
@@ -167,23 +183,22 @@ const WorldTimeExplorer = () => {
             <button
               key={continent.id}
               onClick={() => handleSelectContinent(continent.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 transition-all ${
+              className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                 isActive
-                  ? 'bg-indigo-600 text-white shadow-xs shadow-indigo-600/20'
-                  : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                  ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/80'
+                  : 'bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
               }`}
             >
-              <span>{continent.icon}</span>
-              <span>{continent.name}</span>
+              {continent.name}
             </button>
           );
         })}
       </div>
 
-      {/* Main Interactive Stage: 3D Globe / 2D Map + Details Card */}
-      <div className="p-6 md:p-8">
+      {/* Main Interactive Stage */}
+      <div className="p-5 md:p-6">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left Column: Visual Globe/Map (7 or 8 cols on large screen) */}
+          {/* Left Column: 3D Globe / 2D Map (8 cols) */}
           <div className="lg:col-span-7 xl:col-span-8 flex flex-col gap-4">
             {viewMode === 'globe' ? (
               <WorldGlobe3D
@@ -198,10 +213,10 @@ const WorldTimeExplorer = () => {
               />
             )}
 
-            {/* City Quick-Select Carousel / Chips */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
-              <span className="text-xs font-semibold text-slate-400 shrink-0">
-                Key Cities:
+            {/* Quick Nodes Carousel */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none font-mono text-xs">
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider shrink-0">
+                NODES:
               </span>
               {filteredCities.slice(0, 8).map((city) => {
                 const isSelected = selectedCity.id === city.id;
@@ -210,15 +225,15 @@ const WorldTimeExplorer = () => {
                   <button
                     key={city.id}
                     onClick={() => handleSelectCity(city)}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border shrink-0 transition-all ${
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border shrink-0 transition-all ${
                       isSelected
-                        ? 'bg-slate-900 border-slate-900 text-white shadow-md'
-                        : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
+                        ? 'bg-cyan-950/80 border-cyan-700/80 text-cyan-300'
+                        : 'bg-slate-950/60 hover:bg-slate-800 border-slate-800 text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    <span>{city.flag}</span>
-                    <span className="font-semibold">{city.name}</span>
-                    <span className={`font-mono text-[11px] ${isSelected ? 'text-indigo-300' : 'text-slate-400'}`}>
+                    <span className="font-bold tracking-wider">{city.code}</span>
+                    <span className="text-[11px] font-sans">{city.name}</span>
+                    <span className="text-[11px] text-slate-400">
                       {is24Hour ? cTime.time24 : cTime.time.split(' ')[0]}
                     </span>
                   </button>
@@ -227,87 +242,175 @@ const WorldTimeExplorer = () => {
             </div>
           </div>
 
-          {/* Right Column: Selected Location Inspector Card (5 or 4 cols) */}
-          <div className="lg:col-span-5 xl:col-span-4 flex flex-col gap-5">
-            {/* Active City Inspector Card */}
-            <div className="p-6 rounded-3xl bg-radial from-slate-900 to-slate-950 text-white border border-slate-800 shadow-xl relative overflow-hidden">
-              {/* Subtle background glow element */}
+          {/* Right Column: Detailed Precision Chronometer Instrument (4 cols) */}
+          <div className="lg:col-span-5 xl:col-span-4 flex flex-col gap-4">
+            {/* Primary Precision Chronometer Card */}
+            <div className="p-6 rounded-2xl bg-slate-950 border border-slate-800 shadow-xl relative overflow-hidden">
+              {/* Subtle radial glow */}
               <div
-                className="absolute -top-12 -right-12 w-48 h-48 rounded-full blur-3xl opacity-20 pointer-events-none"
-                style={{ backgroundColor: selectedCity.color || '#6366f1' }}
+                className="absolute -top-16 -right-16 w-52 h-52 rounded-full blur-3xl opacity-15 pointer-events-none"
+                style={{ backgroundColor: selectedCity.color || '#38bdf8' }}
               />
 
-              {/* City Header */}
+              {/* City Header & Airport/ISO Badge */}
               <div className="flex items-start justify-between gap-3 relative z-10 mb-5">
-                <div className="flex items-center gap-3">
-                  <span className="text-3xl p-2 rounded-2xl bg-white/10 backdrop-blur-md border border-white/10 shadow-inner">
-                    {selectedCity.flag}
-                  </span>
-                  <div>
-                    <h3 className="text-2xl font-bold tracking-tight text-white">
-                      {selectedCity.name}
-                    </h3>
-                    <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
-                      <span>{selectedCity.country}</span>
-                      <span>·</span>
-                      <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-medium">
-                        {selectedCity.continent}
-                      </span>
-                    </p>
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 font-mono font-bold text-xs border border-cyan-800/80">
+                      {selectedCity.code}
+                    </span>
+                    <span className="text-slate-400 font-mono text-[11px]">
+                      {selectedCity.iata} / {selectedCity.countryCode}
+                    </span>
                   </div>
+                  <h3 className="text-2xl font-bold tracking-tight text-white">
+                    {selectedCity.name}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {selectedCity.country} · {selectedCity.continent}
+                  </p>
                 </div>
 
-                {/* Day / Night Badge */}
+                {/* Day / Night Indicator Pill */}
                 <div
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold backdrop-blur-md border ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-medium border ${
                     activeTimeInfo.isDaytime
-                      ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                      : 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
+                      ? 'bg-amber-950/40 border-amber-800/60 text-amber-300'
+                      : 'bg-indigo-950/40 border-indigo-800/60 text-indigo-300'
                   }`}
                 >
                   {activeTimeInfo.isDaytime ? (
                     <>
-                      <Sun className="w-3.5 h-3.5" />
-                      <span>Daylight</span>
+                      <Sun className="w-3.5 h-3.5 text-amber-400" />
+                      <span>DAY</span>
                     </>
                   ) : (
                     <>
-                      <Moon className="w-3.5 h-3.5" />
-                      <span>Night</span>
+                      <Moon className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>NIGHT</span>
                     </>
                   )}
                 </div>
               </div>
 
-              {/* Digital Big Clock Display */}
-              <div className="my-4 p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-sm relative z-10 text-center">
-                <div className="text-4xl md:text-5xl font-mono font-black tracking-tight text-white drop-shadow-sm">
-                  {is24Hour ? activeTimeInfo.time24 : activeTimeInfo.time}
+              {/* Digital Big Chronometer Display with Millisecond Ticker */}
+              <div className="my-4 p-5 rounded-xl bg-slate-900/80 border border-slate-800 backdrop-blur-sm relative z-10 text-center">
+                <div className="text-4xl md:text-5xl font-mono font-black tracking-tight text-white tabular-nums drop-shadow-sm flex items-baseline justify-center gap-1">
+                  <span>{is24Hour ? activeTimeInfo.time24 : activeTimeInfo.time}</span>
+                  <span className="text-sm font-normal text-cyan-400 font-mono opacity-80">
+                    .{activeTimeInfo.ms}
+                  </span>
                 </div>
-                <div className="flex items-center justify-center gap-2 text-xs text-slate-300 mt-2 font-medium">
-                  <Calendar className="w-3.5 h-3.5 text-indigo-400" />
+                <div className="flex items-center justify-center gap-2 text-xs text-slate-400 mt-2 font-mono">
+                  <Calendar className="w-3.5 h-3.5 text-cyan-400" />
                   <span>{activeTimeInfo.date}</span>
                 </div>
               </div>
 
+              {/* 24-Hour Observatory Solar Dial Gauge */}
+              <div className="my-4 p-4 rounded-xl bg-slate-900/40 border border-slate-800/80 relative z-10 flex items-center justify-between gap-4">
+                {/* Miniature 24h Circular Dial */}
+                <div className="relative w-16 h-16 shrink-0 flex items-center justify-center">
+                  {/* Outer bezel */}
+                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 64 64">
+                    <circle
+                      cx="32"
+                      cy="32"
+                      r="28"
+                      fill="none"
+                      stroke="#1e293b"
+                      strokeWidth="3"
+                    />
+                    {/* Daylight arc (06:00 to 18:00 is half circle) */}
+                    <circle
+                      cx="32"
+                      cy="32"
+                      r="28"
+                      fill="none"
+                      stroke="#f59e0b"
+                      strokeWidth="3"
+                      strokeDasharray="88 88"
+                      strokeDashoffset="-44"
+                      strokeOpacity="0.4"
+                    />
+                    {/* Indicator pointer */}
+                    <line
+                      x1="32"
+                      y1="32"
+                      x2={32 + 22 * Math.cos((dialAngle * Math.PI) / 180)}
+                      y2={32 + 22 * Math.sin((dialAngle * Math.PI) / 180)}
+                      stroke="#38bdf8"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                    <circle cx="32" cy="32" r="3" fill="#38bdf8" />
+                  </svg>
+                  <span className="absolute text-[8px] font-mono text-slate-400 top-1">
+                    00
+                  </span>
+                  <span className="absolute text-[8px] font-mono text-slate-400 bottom-1">
+                    12
+                  </span>
+                </div>
+
+                {/* Solar Elevation and Zenith metadata */}
+                <div className="flex-1 font-mono text-xs">
+                  <div className="flex items-center justify-between text-slate-400 text-[11px] mb-1">
+                    <span>SOLAR ELEVATION:</span>
+                    <strong className="text-slate-200">
+                      {activeTimeInfo.solarElevation > 0 ? '+' : ''}
+                      {activeTimeInfo.solarElevation}°
+                    </strong>
+                  </div>
+                  <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mb-2">
+                    <div
+                      className="h-full bg-cyan-400 transition-all duration-300"
+                      style={{
+                        width: `${Math.max(
+                          0,
+                          Math.min(
+                            100,
+                            ((activeTimeInfo.solarElevation + 90) / 180) * 100
+                          )
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                    <span>NADIR (00H)</span>
+                    <span>ZENITH (12H)</span>
+                  </div>
+                </div>
+              </div>
+
               {/* Time Details Grid */}
-              <div className="grid grid-cols-2 gap-2.5 my-4 relative z-10 text-xs">
-                {/* UTC Offset */}
-                <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-                  <span className="text-slate-400 block text-[11px] mb-0.5">Timezone</span>
-                  <strong className="font-mono text-slate-200 font-semibold block truncate">
+              <div className="grid grid-cols-2 gap-2 my-4 relative z-10 text-xs font-mono">
+                {/* UTC Offset & Timezone */}
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                  <span className="text-slate-400 block text-[10px] uppercase mb-0.5">
+                    TIMEZONE
+                  </span>
+                  <strong className="text-slate-200 font-semibold block truncate">
                     {activeTimeInfo.tzAbbr}
                   </strong>
-                  <span className="text-[10px] text-cyan-400 font-mono">
+                  <span className="text-[11px] text-cyan-400">
                     {activeTimeInfo.utcOffset}
                   </span>
                 </div>
 
-                {/* Business Status */}
-                <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-                  <span className="text-slate-400 block text-[11px] mb-0.5">Business Hours</span>
+                {/* Financial Market Status */}
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                  <span className="text-slate-400 block text-[10px] uppercase mb-0.5">
+                    MARKET [{selectedCity.market || 'FIN'}]
+                  </span>
                   <div className="flex items-center gap-1.5">
-                    <Briefcase className="w-3.5 h-3.5 text-emerald-400" />
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        activeTimeInfo.isBusinessHours
+                          ? 'bg-emerald-400 animate-pulse'
+                          : 'bg-slate-500'
+                      }`}
+                    />
                     <span
                       className={`font-semibold ${
                         activeTimeInfo.isBusinessHours
@@ -315,71 +418,79 @@ const WorldTimeExplorer = () => {
                           : 'text-slate-400'
                       }`}
                     >
-                      {activeTimeInfo.isBusinessHours ? 'Open Now' : 'Closed'}
+                      {activeTimeInfo.isBusinessHours ? 'OPEN' : 'CLOSED'}
                     </span>
                   </div>
                   <span className="text-[10px] text-slate-400">09:00 - 17:00</span>
                 </div>
 
                 {/* Coordinates */}
-                <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-                  <span className="text-slate-400 block text-[11px] mb-0.5">Coordinates</span>
-                  <span className="font-mono text-slate-200 block text-[11px]">
-                    {Math.abs(selectedCity.lat).toFixed(2)}° {selectedCity.lat >= 0 ? 'N' : 'S'},
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                  <span className="text-slate-400 block text-[10px] uppercase mb-0.5">
+                    COORDINATES
                   </span>
-                  <span className="font-mono text-slate-200 block text-[11px]">
-                    {Math.abs(selectedCity.lng).toFixed(2)}° {selectedCity.lng >= 0 ? 'E' : 'W'}
+                  <span className="text-slate-200 block text-[11px]">
+                    {Math.abs(selectedCity.lat).toFixed(2)}°{' '}
+                    {selectedCity.lat >= 0 ? 'N' : 'S'}
+                  </span>
+                  <span className="text-slate-400 block text-[11px]">
+                    {Math.abs(selectedCity.lng).toFixed(2)}°{' '}
+                    {selectedCity.lng >= 0 ? 'E' : 'W'}
                   </span>
                 </div>
 
-                {/* Relative to local device time */}
-                <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-                  <span className="text-slate-400 block text-[11px] mb-0.5">Relative to You</span>
+                {/* Relative to local device clock */}
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+                  <span className="text-slate-400 block text-[10px] uppercase mb-0.5">
+                    LOCAL DELTA
+                  </span>
                   <div className="flex items-center gap-1 text-slate-200 font-semibold">
-                    <ArrowRightLeft className="w-3 h-3 text-indigo-400 shrink-0" />
-                    <span className="text-[11px] truncate">{activeTimeInfo.relativeToUser}</span>
+                    <ArrowRightLeft className="w-3 h-3 text-cyan-400 shrink-0" />
+                    <span className="text-[11px] truncate">
+                      {activeTimeInfo.relativeToUser}
+                    </span>
                   </div>
-                  <span className="text-[10px] text-slate-400">vs device clock</span>
+                  <span className="text-[10px] text-slate-400">vs user machine</span>
                 </div>
               </div>
 
               {/* Hub description */}
               {selectedCity.description && (
-                <div className="mt-3 text-xs text-slate-400 border-t border-white/10 pt-3 flex items-center gap-2">
-                  <Navigation className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                  <span className="italic">{selectedCity.description}</span>
+                <div className="mt-2 text-xs text-slate-400 border-t border-slate-800/80 pt-3 flex items-center gap-2">
+                  <Compass className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                  <span className="text-[11px]">{selectedCity.description}</span>
                 </div>
               )}
             </div>
 
             {/* City Search Bar & Filter */}
-            <div className="p-5 rounded-3xl bg-slate-50 border border-slate-200/80">
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Find Any City / Hub
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
+              <div className="flex items-center justify-between gap-2 mb-2 font-mono text-xs">
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider">
+                  FILTER HUBS
                 </span>
-                <span className="text-xs text-slate-500 font-medium">
+                <span className="text-slate-400 text-[11px]">
                   {filteredCities.length} locations
                 </span>
               </div>
 
               {/* Search input */}
-              <div className="relative mb-3">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <div className="relative mb-2">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search city, country, or timezone..."
-                  className="w-full pl-9 pr-4 py-2 bg-white rounded-xl border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+                  placeholder="Search code, city, country, or timezone..."
+                  className="w-full pl-8 pr-3 py-1.5 bg-slate-900 rounded-lg border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500 font-mono transition-all"
                 />
               </div>
 
               {/* Scrollable List of Cities */}
-              <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 text-xs">
+              <div className="max-h-40 overflow-y-auto space-y-1 pr-1 font-mono text-xs">
                 {filteredCities.length === 0 ? (
-                  <div className="text-center py-4 text-slate-400 text-xs">
-                    No matching cities found
+                  <div className="text-center py-3 text-slate-400 text-xs">
+                    No matching locations found
                   </div>
                 ) : (
                   filteredCities.map((city) => {
@@ -389,20 +500,24 @@ const WorldTimeExplorer = () => {
                       <button
                         key={city.id}
                         onClick={() => handleSelectCity(city)}
-                        className={`w-full flex items-center justify-between p-2 rounded-xl transition-all ${
+                        className={`w-full flex items-center justify-between p-2 rounded-lg transition-all ${
                           isSelected
-                            ? 'bg-indigo-50 border border-indigo-200 text-indigo-900 font-semibold'
-                            : 'hover:bg-white text-slate-700 border border-transparent'
+                            ? 'bg-cyan-950/80 border border-cyan-800 text-cyan-300 font-semibold'
+                            : 'hover:bg-slate-900 text-slate-400 hover:text-slate-200 border border-transparent'
                         }`}
                       >
                         <div className="flex items-center gap-2 truncate">
-                          <span>{city.flag}</span>
-                          <span className="truncate">{city.name}</span>
+                          <span className="px-1.5 py-0.5 rounded bg-slate-900 text-[10px] text-slate-400 font-bold border border-slate-800">
+                            {city.code}
+                          </span>
+                          <span className="truncate text-slate-200 font-sans text-xs">
+                            {city.name}
+                          </span>
                           <span className="text-[10px] text-slate-400 font-normal">
-                            ({city.continent})
+                            [{city.countryCode}]
                           </span>
                         </div>
-                        <span className="font-mono text-[11px] text-slate-500 shrink-0">
+                        <span className="text-[11px] text-slate-400 shrink-0">
                           {is24Hour ? cInfo.time24 : cInfo.time.split(' ')[0]}
                         </span>
                       </button>
@@ -414,24 +529,24 @@ const WorldTimeExplorer = () => {
           </div>
         </div>
 
-        {/* Global Continents Snapshot Grid */}
-        <div className="mt-8 pt-6 border-t border-slate-100">
-          <div className="flex items-center justify-between mb-4">
-            <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-              <Globe className="w-4 h-4 text-indigo-600" />
-              <span>Simultaneous Continental Clocks</span>
-            </h4>
-            <span className="text-xs text-slate-500">Live synchronized ticks</span>
+        {/* Global Financial Market Ribbon at Bottom */}
+        <div className="mt-6 pt-5 border-t border-slate-800">
+          <div className="flex items-center justify-between mb-3 font-mono text-xs">
+            <span className="text-slate-400 text-[11px] uppercase tracking-wider flex items-center gap-2">
+              <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
+              <span>GLOBAL FINANCIAL CENTERS</span>
+            </span>
+            <span className="text-slate-400 text-[10px]">REAL-TIME TICKER</span>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 font-mono">
             {[
-              { id: 'tokyo', name: 'Tokyo', flag: '🇯🇵', continent: 'Asia' },
-              { id: 'london', name: 'London', flag: '🇬🇧', continent: 'Europe' },
-              { id: 'new_york', name: 'New York', flag: '🇺🇸', continent: 'North America' },
-              { id: 'sao_paulo', name: 'São Paulo', flag: '🇧🇷', continent: 'South America' },
-              { id: 'cairo', name: 'Cairo', flag: '🇪🇬', continent: 'Africa' },
-              { id: 'sydney', name: 'Sydney', flag: '🇦🇺', continent: 'Oceania' },
+              { id: 'tokyo', name: 'Tokyo', code: 'TYO', market: 'TSE' },
+              { id: 'hong_kong', name: 'Hong Kong', code: 'HKG', market: 'HKEX' },
+              { id: 'dubai', name: 'Dubai', code: 'DXB', market: 'DFM' },
+              { id: 'london', name: 'London', code: 'LON', market: 'LSE' },
+              { id: 'new_york', name: 'New York', code: 'NYC', market: 'NYSE' },
+              { id: 'san_francisco', name: 'San Francisco', code: 'SFO', market: 'NASDAQ' },
             ].map((refCity) => {
               const fullCity = WORLD_CITIES.find((c) => c.id === refCity.id);
               if (!fullCity) return null;
@@ -442,34 +557,33 @@ const WorldTimeExplorer = () => {
                 <button
                   key={refCity.id}
                   onClick={() => handleSelectCity(fullCity)}
-                  className={`p-3 rounded-2xl border text-left transition-all ${
+                  className={`p-2.5 rounded-xl border text-left transition-all ${
                     isSelected
-                      ? 'bg-indigo-50/70 border-indigo-300 ring-2 ring-indigo-500/20 shadow-xs'
-                      : 'bg-slate-50 hover:bg-white hover:border-slate-300 border-slate-200/70'
+                      ? 'bg-cyan-950/80 border-cyan-700 ring-1 ring-cyan-500/30'
+                      : 'bg-slate-950 hover:bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-base">{refCity.flag}</span>
+                    <span className="font-bold text-xs text-white">
+                      {refCity.code}
+                    </span>
                     <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                        tInfo.isDaytime
-                          ? 'bg-amber-100 text-amber-800'
-                          : 'bg-slate-200 text-slate-700'
+                      className={`text-[9px] px-1 py-0.2 rounded font-semibold ${
+                        tInfo.isBusinessHours
+                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                          : 'bg-slate-900 text-slate-400 border border-slate-800'
                       }`}
                     >
-                      {tInfo.isDaytime ? 'Day' : 'Night'}
+                      {tInfo.isBusinessHours ? 'OPEN' : 'CLOSED'}
                     </span>
                   </div>
-                  <div className="font-bold text-slate-900 text-xs truncate">
+                  <div className="text-[11px] text-slate-400 truncate font-sans">
                     {refCity.name}
                   </div>
-                  <div className="text-[10px] text-slate-400 truncate mb-1">
-                    {refCity.continent}
-                  </div>
-                  <div className="font-mono font-black text-slate-800 text-sm">
+                  <div className="text-sm font-bold text-white tracking-tight mt-0.5">
                     {is24Hour ? tInfo.time24 : tInfo.time}
                   </div>
-                  <div className="text-[10px] text-indigo-600 font-medium truncate mt-0.5">
+                  <div className="text-[10px] text-cyan-400 mt-0.5">
                     {tInfo.utcOffset}
                   </div>
                 </button>
