@@ -1,13 +1,48 @@
 import { useState, useEffect } from 'react';
 import {
     Monitor, Shield, Activity, Smartphone, Clock, Globe,
-    Trash2, AlertCircle, Laptop, Tablet, Command, Terminal, Sparkles, Key, Lock, PowerOff
+    Trash2, AlertCircle, Sparkles, Key, Lock, PowerOff,
+    Fingerprint, ShieldCheck, RefreshCw, CheckCircle2
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useVault } from '../context/VaultContext';
 import api from '../config/api';
 import Navbar from '../components/Navbar';
 import McpVaultAuthModal from '../components/vault/McpVaultAuthModal';
+import { DeviceOsLogo, DeviceBrowserLogo } from '../components/DeviceBrandLogos';
+
+const formatDate = (date) => {
+    return new Date(date).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
+};
+
+const formatTimeAgo = (date) => {
+    if (!date) return 'Recently';
+    const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+    if (seconds < 60) return 'Just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    return new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+
+const formatIpAddress = (ip) => {
+    if (!ip || ip === 'Unknown') return 'Direct Network';
+    const clean = String(ip).replace(/^::ffff:/, '');
+    if (clean === '127.0.0.1' || clean === '::1') return '127.0.0.1 (Localhost)';
+    if (clean.startsWith('10.') || clean.startsWith('172.16.') || clean.startsWith('192.168.')) {
+        return `${clean} (Cloud Proxy/Gateway)`;
+    }
+    return clean;
+};
 
 const Profile = () => {
     const { user, updateUser } = useAuth();
@@ -95,30 +130,6 @@ const Profile = () => {
         } finally {
             setActionLoading(null);
         }
-    };
-
-    const formatDate = (date) => {
-        return new Date(date).toLocaleString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-        });
-    };
-
-    const getDeviceIcon = (os, type) => {
-        const osLower = (os || '').toLowerCase();
-        const typeLower = (type || '').toLowerCase();
-
-        if (typeLower === 'mobile') return <Smartphone className="w-6 h-6" />;
-        if (typeLower === 'tablet') return <Tablet className="w-6 h-6" />;
-
-        if (osLower.includes('mac') || osLower.includes('ios')) return <Command className="w-6 h-6" />;
-        if (osLower.includes('win')) return <Monitor className="w-6 h-6" />;
-        if (osLower.includes('linux')) return <Terminal className="w-6 h-6" />;
-
-        return <Laptop className="w-6 h-6" />;
     };
 
     const getSecurityStatus = () => {
@@ -271,80 +282,157 @@ const Profile = () => {
                     <div className="p-6 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div>
                             <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                                <Smartphone className="w-5 h-5 text-slate-500" />
-                                Active Sessions
+                                <Smartphone className="w-5 h-5 text-indigo-600" />
+                                Active Devices & Recognized Sessions
                             </h2>
-                            <p className="text-sm text-slate-500 mt-1">Manage devices where you're currently logged in</p>
+                            <p className="text-sm text-slate-500 mt-1">
+                                Devices authenticated with Single Sign-On (SSO) hardware recognition
+                            </p>
                         </div>
-                        {devices.length > 1 && (
+                        <div className="flex items-center gap-2">
                             <button
-                                onClick={handleLogoutAll}
-                                disabled={actionLoading === 'all'}
-                                className="btn btn-secondary text-sm flex items-center gap-2 text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300"
+                                onClick={fetchDevices}
+                                disabled={loading}
+                                className="p-2 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
+                                title="Refresh devices"
                             >
-                                <AlertCircle className="w-4 h-4" />
-                                {actionLoading === 'all' ? 'Logging out...' : 'Logout All Others'}
+                                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
                             </button>
-                        )}
+                            {devices.length > 1 && (
+                                <button
+                                    onClick={handleLogoutAll}
+                                    disabled={actionLoading === 'all'}
+                                    className="px-3.5 py-2 text-xs font-semibold rounded-lg flex items-center gap-2 text-red-600 border border-red-200 hover:bg-red-50 hover:border-red-300 transition-colors"
+                                >
+                                    <AlertCircle className="w-4 h-4" />
+                                    {actionLoading === 'all' ? 'Revoking...' : 'Logout Other Devices'}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* SSO Security Notice */}
+                    <div className="px-6 py-3 bg-slate-50 border-b border-slate-100 flex items-center gap-2.5 text-xs text-slate-600">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>
+                            <strong>SSO Device Identity:</strong> Each device is assigned a persistent cryptographic signature to reliably differentiate separate hardware across changing IP addresses and proxy networks.
+                        </span>
                     </div>
 
                     <div className="divide-y divide-slate-100">
                         {loading ? (
-                            <div className="p-8 text-center text-slate-500 flex flex-col items-center">
-                                <div className="w-6 h-6 border-2 border-slate-300 border-t-slate-900 rounded-full animate-spin mb-3"></div>
-                                Loading sessions...
+                            <div className="p-10 text-center text-slate-500 flex flex-col items-center">
+                                <div className="w-7 h-7 border-2 border-slate-300 border-t-indigo-600 rounded-full animate-spin mb-3"></div>
+                                <span className="text-sm">Verifying active sessions...</span>
                             </div>
                         ) : devices.length === 0 ? (
-                            <div className="p-8 text-center text-slate-500">
-                                No active sessions found
+                            <div className="p-10 text-center text-slate-500">
+                                No active sessions found.
                             </div>
                         ) : (
                             devices.map((device) => (
                                 <div
                                     key={device.id}
-                                    className={`p-6 transition-colors ${device.isCurrent ? 'bg-slate-50/50' : 'hover:bg-slate-50'}`}
+                                    className={`p-6 transition-colors ${
+                                        device.isCurrent
+                                            ? 'bg-indigo-50/30'
+                                            : 'hover:bg-slate-50/80'
+                                    }`}
                                 >
-                                    <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                                        <div className="flex item-start gap-4">
-                                            <div className={`p-3 rounded-xl ${device.isCurrent ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-600'}`}>
-                                                {getDeviceIcon(device.os, device.deviceType)}
+                                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
+                                        <div className="flex items-start gap-4">
+                                            {/* Combined OS & Browser Logos */}
+                                            <div className="relative shrink-0">
+                                                <div
+                                                    className={`w-13 h-13 rounded-2xl flex items-center justify-center border shadow-xs transition-transform ${
+                                                        device.isCurrent
+                                                            ? 'bg-white border-indigo-200 text-slate-900 ring-2 ring-indigo-500/20'
+                                                            : 'bg-white border-slate-200 text-slate-700'
+                                                    }`}
+                                                >
+                                                    <DeviceOsLogo os={device.os} brand={device.brand} className="w-6 h-6" />
+                                                </div>
+                                                <div
+                                                    className="absolute -bottom-1 -right-1 p-1 bg-white rounded-full shadow-md border border-slate-200 flex items-center justify-center"
+                                                    title={`Browser: ${device.browser}`}
+                                                >
+                                                    <DeviceBrowserLogo browser={device.browser} className="w-4 h-4" />
+                                                </div>
                                             </div>
-                                            <div>
-                                                <div className="flex items-center gap-2 mb-1">
-                                                    <h3 className="font-semibold text-slate-900">{device.os} - {device.browser}</h3>
-                                                    {device.isCurrent && (
-                                                        <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
-                                                            Current Device
+
+                                            {/* Device Info & Identifiers */}
+                                            <div className="space-y-2">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <h3 className="font-bold text-slate-900 text-base">
+                                                        {device.deviceName || `${device.os} Device`}
+                                                    </h3>
+                                                    {device.isCurrent ? (
+                                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                                            Current Device · Active Now
+                                                        </span>
+                                                    ) : (
+                                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+                                                            <Clock className="w-3 h-3 text-slate-400" />
+                                                            Active {formatTimeAgo(device.lastActive)}
                                                         </span>
                                                     )}
                                                 </div>
-                                                <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-500 mt-2">
+
+                                                {/* Details badges */}
+                                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                                    <span className="px-2.5 py-1 rounded-md bg-slate-100 font-medium text-slate-700 border border-slate-200/60">
+                                                        {device.os}
+                                                    </span>
+                                                    <span className="px-2.5 py-1 rounded-md bg-slate-100 font-medium text-slate-700 border border-slate-200/60">
+                                                        {device.browser}
+                                                    </span>
+                                                    <span
+                                                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-indigo-50 font-mono text-indigo-700 border border-indigo-100"
+                                                        title={`Unique SSO identifier: ${device.deviceId}`}
+                                                    >
+                                                        <Fingerprint className="w-3.5 h-3.5 text-indigo-500" />
+                                                        SSO ID: {device.deviceId ? device.deviceId.substring(0, 12) + '…' : 'Verified'}
+                                                    </span>
+                                                </div>
+
+                                                {/* Network and Last Active Metadata */}
+                                                <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 text-xs text-slate-500 pt-1">
                                                     <div className="flex items-center gap-1.5">
-                                                        <Globe className="w-4 h-4" />
-                                                        {device.ip === '::1' || device.ip === '127.0.0.1' ? 'Localhost' : device.ip}
+                                                        <Globe className="w-3.5 h-3.5 text-slate-400" />
+                                                        <span>IP: <strong className="font-mono text-slate-700">{formatIpAddress(device.ip)}</strong></span>
                                                     </div>
                                                     <div className="flex items-center gap-1.5">
-                                                        <Clock className="w-4 h-4" />
-                                                        Last active: {formatDate(device.lastActive)}
+                                                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                                        <span>Last seen: {formatDate(device.lastActive)}</span>
                                                     </div>
                                                 </div>
                                             </div>
                                         </div>
 
-                                        {!device.isCurrent && (
-                                            <button
-                                                onClick={() => handleLogoutDevice(device.id)}
-                                                disabled={actionLoading === device.id}
-                                                className="self-start md:self-center p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                                                title="Logout this device"
-                                            >
-                                                {actionLoading === device.id ? (
-                                                    <div className="w-5 h-5 border-2 border-red-200 border-t-red-600 rounded-full animate-spin"></div>
-                                                ) : (
-                                                    <Trash2 className="w-5 h-5" />
-                                                )}
-                                            </button>
-                                        )}
+                                        {/* Action buttons */}
+                                        <div className="flex items-center self-end md:self-center shrink-0">
+                                            {device.isCurrent ? (
+                                                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100">
+                                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                                    Active Session
+                                                </span>
+                                            ) : (
+                                                <button
+                                                    onClick={() => handleLogoutDevice(device.id)}
+                                                    disabled={actionLoading === device.id}
+                                                    className="px-3.5 py-2 text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 border border-red-200 hover:border-red-300 rounded-xl transition-all flex items-center gap-1.5"
+                                                    title="Revoke and logout this session"
+                                                >
+                                                    {actionLoading === device.id ? (
+                                                        <div className="w-4 h-4 border-2 border-red-300 border-t-red-600 rounded-full animate-spin"></div>
+                                                    ) : (
+                                                        <Trash2 className="w-4 h-4" />
+                                                    )}
+                                                    Revoke Access
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                             ))

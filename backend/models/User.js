@@ -11,7 +11,13 @@ const deviceSchema = new mongoose.Schema({
     required: true,
   },
   browser: String,
+  browserName: String,
+  browserVersion: String,
   os: String,
+  osName: String,
+  osVersion: String,
+  deviceType: String,
+  brand: String,
   ip: String,
   lastActive: {
     type: Date,
@@ -111,6 +117,15 @@ userSchema.methods.addDevice = function (deviceInfo) {
   if (existingDevice) {
     existingDevice.lastActive = Date.now();
     existingDevice.ip = deviceInfo.ip;
+    if (deviceInfo.deviceName) existingDevice.deviceName = deviceInfo.deviceName;
+    if (deviceInfo.browser) existingDevice.browser = deviceInfo.browser;
+    if (deviceInfo.browserName) existingDevice.browserName = deviceInfo.browserName;
+    if (deviceInfo.browserVersion) existingDevice.browserVersion = deviceInfo.browserVersion;
+    if (deviceInfo.os) existingDevice.os = deviceInfo.os;
+    if (deviceInfo.osName) existingDevice.osName = deviceInfo.osName;
+    if (deviceInfo.osVersion) existingDevice.osVersion = deviceInfo.osVersion;
+    if (deviceInfo.deviceType) existingDevice.deviceType = deviceInfo.deviceType;
+    if (deviceInfo.brand) existingDevice.brand = deviceInfo.brand;
   } else {
     this.devices.push(deviceInfo);
   }

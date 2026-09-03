@@ -142,6 +142,12 @@ export const login = async (req, res) => {
     const duration = 24;
     const expiresAt = new Date(Date.now() + duration * 60 * 60 * 1000);
 
+    // Invalidate previous active sessions for this specific device
+    await Session.updateMany(
+      { userId: user._id, deviceId: deviceInfo.deviceId, isActive: true },
+      { isActive: false }
+    ).catch(() => {});
+
     // Create session
     const session = await Session.create({
       userId: user._id,
@@ -242,6 +248,12 @@ export const verify2FA = async (req, res) => {
       parseInt(process.env.MAX_SESSION_DURATION) || 720
     );
     const expiresAt = new Date(Date.now() + duration * 60 * 60 * 1000);
+
+    // Invalidate previous active sessions for this specific device
+    await Session.updateMany(
+      { userId: user._id, deviceId: deviceInfo.deviceId, isActive: true },
+      { isActive: false }
+    ).catch(() => {});
 
     // Create session
     const session = await Session.create({
@@ -391,20 +403,97 @@ export const getDevices = async (req, res) => {
       userId: req.user._id,
       isActive: true,
       expiresAt: { $gt: Date.now() },
-    }).sort({ createdAt: -1 });
+    }).sort({ updatedAt: -1, createdAt: -1 });
 
-    const devices = sessions.map((session) => ({
-      id: session._id,
-      deviceId: session.deviceId,
-      deviceName: session.deviceInfo.deviceName,
-      browser: session.deviceInfo.browser,
-      os: session.deviceInfo.os,
-      ip: session.deviceInfo.ip,
-      lastActive: session.updatedAt,
-      createdAt: session.createdAt,
-      expiresAt: session.expiresAt,
-      isCurrent: session.token === req.token,
-    }));
+    // Deduplicate sessions representing the same physical device/browser
+    const seenDeviceKeys = new Set();
+    const uniqueSessions = [];
+    const duplicateSessionIds = [];
+
+    // Prioritize current session if present in the list
+    const currentSession = sessions.find((s) => s.token === req.token);
+    if (currentSession) {
+      const devKey =
+        currentSession.deviceId ||
+        `${currentSession.deviceInfo?.os}_${currentSession.deviceInfo?.browser}`;
+      seenDeviceKeys.add(devKey);
+      uniqueSessions.push(currentSession);
+    }
+
+    for (const s of sessions) {
+      if (currentSession && s._id.toString() === currentSession._id.toString()) {
+        continue;
+      }
+
+      // Group by explicit deviceId or by OS + Browser combination
+      const devKey =
+        s.deviceId ||
+        `${s.deviceInfo?.os}_${s.deviceInfo?.browser}`;
+
+      if (seenDeviceKeys.has(devKey)) {
+        duplicateSessionIds.push(s._id);
+      } else {
+        seenDeviceKeys.add(devKey);
+        uniqueSessions.push(s);
+      }
+    }
+
+    // Clean up stale duplicate sessions in the background
+    if (duplicateSessionIds.length > 0) {
+      Session.updateMany(
+        { _id: { $in: duplicateSessionIds } },
+        { isActive: false }
+      ).catch(() => {});
+    }
+
+    const devices = uniqueSessions.map((session) => {
+      const info = session.deviceInfo || {};
+      const rawIp = info.ip || '';
+      const cleanIp = rawIp.replace(/^::ffff:/, '');
+      const isCurrent = session.token === req.token;
+
+      // Extract or infer OS
+      const os = info.os || 'Unknown OS';
+      const osName =
+        info.osName ||
+        (/mac/i.test(os) ? 'macOS' : /win/i.test(os) ? 'Windows' : /linux/i.test(os) ? 'Linux' : /ios/i.test(os) ? 'iOS' : /android/i.test(os) ? 'Android' : 'OS');
+
+      // Extract or infer Browser
+      const browser = info.browser || 'Web Browser';
+      const browserName =
+        info.browserName ||
+        (/chrome/i.test(browser) ? 'Chrome' : /safari/i.test(browser) ? 'Safari' : /firefox/i.test(browser) ? 'Firefox' : /edge/i.test(browser) ? 'Edge' : 'Browser');
+
+      // Infer device type and brand
+      const brand =
+        info.brand ||
+        (/mac|ios|apple/i.test(os) ? 'apple' : /win/i.test(os) ? 'microsoft' : /android/i.test(os) ? 'android' : /linux/i.test(os) ? 'linux' : 'generic');
+
+      const deviceType = info.deviceType || (/mobile/i.test(os) ? 'mobile' : 'desktop');
+
+      const deviceName =
+        info.deviceName ||
+        (brand === 'apple' ? (deviceType === 'mobile' ? 'Apple iPhone' : 'Apple Mac') : `${osName} Device`);
+
+      return {
+        id: session._id,
+        deviceId: session.deviceId,
+        deviceName,
+        browser,
+        browserName,
+        browserVersion: info.browserVersion || '',
+        os,
+        osName,
+        osVersion: info.osVersion || '',
+        deviceType,
+        brand,
+        ip: cleanIp === '::1' || cleanIp === '127.0.0.1' ? '127.0.0.1' : (cleanIp || 'Direct Network'),
+        lastActive: session.updatedAt || session.createdAt,
+        createdAt: session.createdAt,
+        expiresAt: session.expiresAt,
+        isCurrent,
+      };
+    });
 
     res.status(200).json({
       success: true,

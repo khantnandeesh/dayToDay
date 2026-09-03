@@ -35,6 +35,9 @@ dotenv.config();
 
 const app = express();
 
+// Trust reverse proxy (Cloud Run, Heroku, Nginx) so client IP is accurately extracted
+app.set('trust proxy', 1);
+
 // ---------------------------------------------------------------------------
 // Security & Body Parsers
 // ---------------------------------------------------------------------------

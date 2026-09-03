@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getOrCreateDeviceId, getClientDeviceDisplayName } from '../utils/deviceIdentity';
 
 const getBackendBaseUrl = () => {
   if (import.meta.env.VITE_BACKEND_URL !== undefined && import.meta.env.VITE_BACKEND_URL !== '') {
@@ -23,13 +24,28 @@ const api = axios.create({
   },
 });
 
-// Add token to requests
+// Add token and device identification to requests
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+
+    // Attach persistent client device ID for SSO & device recognition
+    try {
+      const deviceId = getOrCreateDeviceId();
+      if (deviceId) {
+        config.headers['X-Device-Id'] = deviceId;
+      }
+      const deviceName = getClientDeviceDisplayName();
+      if (deviceName) {
+        config.headers['X-Device-Name'] = deviceName;
+      }
+    } catch {
+      // ignore
+    }
+
     return config;
   },
   (error) => {

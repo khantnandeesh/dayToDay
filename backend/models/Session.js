@@ -32,7 +32,13 @@ const sessionSchema = new mongoose.Schema(
     deviceInfo: {
       deviceName: String,
       browser: String,
+      browserName: String,
+      browserVersion: String,
       os: String,
+      osName: String,
+      osVersion: String,
+      deviceType: String,
+      brand: String,
       ip: String,
     },
   },
