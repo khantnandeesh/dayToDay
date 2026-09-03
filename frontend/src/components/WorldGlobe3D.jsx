@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
-import * as d3 from 'd3';
-import { feature } from 'topojson-client';
-import landTopology from '../data/land-110m.json';
 import { WORLD_CITIES, findNearestCity, getTimeInfo } from '../data/worldTimezones';
+import { WORLD_NORMALIZED_RINGS } from '../data/worldMapData';
 import { RotateCw, ZoomIn, ZoomOut, Compass, Play, Pause, MapPin } from 'lucide-react';
 
 const GLOBE_RADIUS = 100;
@@ -20,7 +18,7 @@ function latLngToVector3(lat, lng, radius) {
   return new THREE.Vector3(x, y, z);
 }
 
-// Generate world landmass canvas texture using TopoJSON and D3
+// Generate world landmass canvas texture using precomputed continental geometry
 function createWorldTexture() {
   const width = 2048;
   const height = 1024;
@@ -37,45 +35,56 @@ function createWorldTexture() {
   ctx.fillStyle = oceanGrad;
   ctx.fillRect(0, 0, width, height);
 
-  // Setup D3 equirectangular projection onto canvas
-  const projection = d3
-    .geoEquirectangular()
-    .scale(width / (2 * Math.PI))
-    .translate([width / 2, height / 2]);
-
-  const pathGenerator = d3.geoPath(projection, ctx);
-
-  // Draw delicate graticule grid lines
-  const graticule = d3.geoGraticule();
+  // Draw delicate graticule grid lines (every 15 degrees)
   ctx.beginPath();
   ctx.strokeStyle = 'rgba(99, 102, 241, 0.12)';
   ctx.lineWidth = 1;
-  pathGenerator(graticule());
+  // Longitude verticals (24 steps for 360 deg)
+  for (let i = 0; i <= 24; i++) {
+    const x = (i / 24) * width;
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+  }
+  // Latitude horizontals (12 steps for 180 deg)
+  for (let j = 0; j <= 12; j++) {
+    const y = (j / 12) * height;
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+  }
   ctx.stroke();
 
   // Highlight Equator and Prime Meridian
   ctx.beginPath();
-  ctx.strokeStyle = 'rgba(129, 140, 248, 0.3)';
+  ctx.strokeStyle = 'rgba(129, 140, 248, 0.35)';
   ctx.lineWidth = 1.5;
-  pathGenerator(d3.geoGraticule().stepMinor([0, 0]).stepMajor([0, 0])());
+  // Equator
+  ctx.moveTo(0, height / 2);
+  ctx.lineTo(width, height / 2);
+  // Prime Meridian
+  ctx.moveTo(width / 2, 0);
+  ctx.lineTo(width / 2, height);
   ctx.stroke();
 
   // Render landmasses
-  const landFeatures = feature(landTopology, landTopology.objects.land);
-
-  // Land fill
   ctx.beginPath();
+  for (let r = 0; r < WORLD_NORMALIZED_RINGS.length; r++) {
+    const ring = WORLD_NORMALIZED_RINGS[r];
+    for (let i = 0; i < ring.length; i++) {
+      const px = ring[i][0] * width;
+      const py = ring[i][1] * height;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+  }
+  // Land fill
   ctx.fillStyle = '#1e293b';
-  pathGenerator(landFeatures);
   ctx.fill();
 
   // Coastline glowing stroke
-  ctx.beginPath();
   ctx.strokeStyle = '#38bdf8';
   ctx.lineWidth = 1.6;
   ctx.shadowColor = 'rgba(56, 189, 248, 0.6)';
   ctx.shadowBlur = 4;
-  pathGenerator(landFeatures);
   ctx.stroke();
   ctx.shadowBlur = 0; // reset shadow
 
