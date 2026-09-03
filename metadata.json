@@ -1,6 +1,6 @@
 {
   "name": "DayToDay Backend & MCP Server",
-  "description": "Production-ready DayToDay platform with Python Code IDE, real Pyright LSP IntelliSense, OnlineCompiler execution, MCP server for AI agents, Drive storage, and Password Vault.",
+  "description": "Production-ready DayToDay platform with 3D Interactive World Globe & Planetary Time Zone Map, Python Code IDE, Pyright LSP IntelliSense, MCP server for AI agents, Drive storage, and Password Vault.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
