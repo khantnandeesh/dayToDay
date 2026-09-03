@@ -1,12 +1,13 @@
 import { useRef, useState } from 'react';
 import { WORLD_CITIES, getTimeInfo } from '../data/worldTimezones';
 import { WORLD_MAP_SVG_PATH } from '../data/worldMapData';
-import { Crosshair, MapPin } from 'lucide-react';
+import { Crosshair, MapPin, Satellite } from 'lucide-react';
 
 const WorldMap2D = ({ selectedCity, onSelectCity }) => {
   const containerRef = useRef(null);
   const [hoveredCity, setHoveredCity] = useState(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const [satelliteView, setSatelliteView] = useState(true);
 
   // Convert longitude and latitude into 1000 x 500 SVG equirectangular coordinates
   const getCoords = (lat, lng) => {
@@ -56,8 +57,22 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
         {/* Deep Ocean Background */}
         <rect width="1000" height="500" fill="url(#ocean-gradient)" />
 
+        {/* Exact NASA Blue Marble Satellite Imagery */}
+        {satelliteView && (
+          <image
+            id="satellite-earth-surface"
+            href="/textures/earth_satellite_2048.jpg"
+            x="0"
+            y="0"
+            width="1000"
+            height="500"
+            preserveAspectRatio="none"
+            opacity="0.94"
+          />
+        )}
+
         {/* Graticule Longitude & Latitude Meridian Lines (15 deg intervals) */}
-        <g id="map-graticules" stroke="rgba(56, 189, 248, 0.08)" strokeWidth="0.75" fill="none">
+        <g id="map-graticules" stroke={satelliteView ? 'rgba(255, 255, 255, 0.12)' : 'rgba(56, 189, 248, 0.08)'} strokeWidth="0.75" fill="none">
           {/* Longitude lines (24 meridians) */}
           {Array.from({ length: 25 }).map((_, i) => {
             const x = (i / 24) * 1000;
@@ -76,7 +91,7 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
           y1={((90 - 23.5) / 180) * 500}
           x2="1000"
           y2={((90 - 23.5) / 180) * 500}
-          stroke="rgba(56, 189, 248, 0.2)"
+          stroke={satelliteView ? 'rgba(56, 189, 248, 0.3)' : 'rgba(56, 189, 248, 0.2)'}
           strokeWidth="1"
           strokeDasharray="4,4"
         />
@@ -85,7 +100,7 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
           y1={((90 - -23.5) / 180) * 500}
           x2="1000"
           y2={((90 - -23.5) / 180) * 500}
-          stroke="rgba(56, 189, 248, 0.2)"
+          stroke={satelliteView ? 'rgba(56, 189, 248, 0.3)' : 'rgba(56, 189, 248, 0.2)'}
           strokeWidth="1"
           strokeDasharray="4,4"
         />
@@ -96,7 +111,7 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
           y1="250"
           x2="1000"
           y2="250"
-          stroke="rgba(56, 189, 248, 0.45)"
+          stroke="rgba(56, 189, 248, 0.55)"
           strokeWidth="1.2"
         />
 
@@ -106,19 +121,21 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
           y1="0"
           x2="500"
           y2="500"
-          stroke="rgba(56, 189, 248, 0.4)"
-          strokeWidth="1"
+          stroke="rgba(56, 189, 248, 0.5)"
+          strokeWidth="1.1"
         />
 
-        {/* Continents & Landmasses */}
-        <path
-          id="world-continents-path"
-          d={WORLD_MAP_SVG_PATH}
-          fill="#0f172a"
-          stroke="#38bdf8"
-          strokeWidth="1.2"
-          strokeOpacity="0.85"
-        />
+        {/* Continents Vector Path (shown when vector mode is active) */}
+        {!satelliteView && (
+          <path
+            id="world-continents-path"
+            d={WORLD_MAP_SVG_PATH}
+            fill="#0f172a"
+            stroke="#38bdf8"
+            strokeWidth="1.2"
+            strokeOpacity="0.85"
+          />
+        )}
 
         {/* City Markers */}
         <g id="world-cities-markers">
@@ -144,7 +161,7 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
                       r="12"
                       fill="none"
                       stroke="#00ffff"
-                      strokeWidth="1.5"
+                      strokeWidth="1.6"
                       strokeOpacity="0.9"
                       className="animate-ping"
                       style={{ animationDuration: '2s' }}
@@ -155,7 +172,7 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
                       stroke="#38bdf8"
                       strokeWidth="0.8"
                       strokeDasharray="3,3"
-                      strokeOpacity="0.6"
+                      strokeOpacity="0.7"
                     />
                   </>
                 )}
@@ -164,14 +181,14 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
                 <circle
                   r={isSelected ? 6 : 4}
                   fill={cityColor}
-                  fillOpacity={isSelected ? 0.4 : 0.2}
+                  fillOpacity={isSelected ? 0.5 : 0.25}
                   stroke={cityColor}
                   strokeWidth="1"
                 />
 
-                {/* Core dot */}
+                {/* Core dot with drop shadow glow */}
                 <circle
-                  r={isSelected ? 3.5 : 2.5}
+                  r={isSelected ? 3.8 : 2.5}
                   fill={isSelected ? '#ffffff' : cityColor}
                   filter="url(#pin-glow)"
                 />
@@ -181,11 +198,12 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
                   <text
                     y="-12"
                     textAnchor="middle"
-                    fill="#f8fafc"
+                    fill="#ffffff"
                     fontFamily="monospace"
                     fontSize="10px"
                     fontWeight="700"
                     letterSpacing="0.05em"
+                    filter="drop-shadow(0px 1px 3px rgba(0,0,0,0.9))"
                   >
                     [{city.code}] {city.name}
                   </text>
@@ -196,10 +214,25 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
         </g>
       </svg>
 
-      {/* Floating Instructions Pill */}
+      {/* Floating Instructions & Satellite Indicator */}
       <div className="absolute top-4 left-4 pointer-events-none flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/85 backdrop-blur-md border border-slate-800 text-xs font-mono text-slate-300 shadow-lg">
-        <Crosshair className="w-3.5 h-3.5 text-cyan-400" />
-        <span>EQUIRECTANGULAR PROJECTION 2:1</span>
+        <Satellite className="w-3.5 h-3.5 text-cyan-400" />
+        <span>{satelliteView ? 'NASA SATELLITE TRUE-COLOR' : 'EQUIRECTANGULAR WGS-84'}</span>
+      </div>
+
+      {/* Satellite / Vector Toggle Switch */}
+      <div className="absolute top-4 right-4 flex items-center bg-slate-950/85 backdrop-blur-md p-1 rounded-xl border border-slate-800 shadow-lg">
+        <button
+          onClick={() => setSatelliteView(!satelliteView)}
+          className={`px-2.5 py-1.5 rounded-lg text-xs font-mono flex items-center gap-1.5 transition-all ${
+            satelliteView
+              ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/60 font-semibold shadow-xs'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+          }`}
+        >
+          <Satellite className="w-3.5 h-3.5" />
+          <span>{satelliteView ? 'Satellite ON' : 'Satellite OFF'}</span>
+        </button>
       </div>
 
       {/* Hover Tooltip */}
@@ -234,8 +267,8 @@ const WorldMap2D = ({ selectedCity, onSelectCity }) => {
         </div>
 
         <div className="hidden sm:flex items-center gap-2 bg-slate-950/85 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-800 text-[11px]">
-          <span>WGS-84 GRID REFERENCE</span>
-          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+          <span>ORBITAL SATELLITE PROJECTION</span>
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
         </div>
       </div>
     </div>

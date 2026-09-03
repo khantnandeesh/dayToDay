@@ -1,17 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { WORLD_CITIES, GLOBAL_ROUTES, findNearestCity, getTimeInfo } from '../data/worldTimezones';
-import { WORLD_NORMALIZED_RINGS } from '../data/worldMapData';
 import {
   RotateCw,
   ZoomIn,
   ZoomOut,
-  Compass,
   Play,
   Pause,
   Layers,
   Crosshair,
   Radio,
+  Cloud,
 } from 'lucide-react';
 
 const GLOBE_RADIUS = 100;
@@ -26,140 +25,6 @@ function latLngToVector3(lat, lng, radius) {
   const y = radius * Math.cos(phi);
 
   return new THREE.Vector3(x, y, z);
-}
-
-// Generate high-precision procedural planetary texture with city lights and bathymetry
-function createDetailedWorldTexture() {
-  const width = 2048;
-  const height = 1024;
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-
-  // Deep space ocean with subtle bathymetric latitude gradient
-  const oceanGrad = ctx.createLinearGradient(0, 0, 0, height);
-  oceanGrad.addColorStop(0, '#040714');
-  oceanGrad.addColorStop(0.25, '#070f2b');
-  oceanGrad.addColorStop(0.5, '#0a1438');
-  oceanGrad.addColorStop(0.75, '#070f2b');
-  oceanGrad.addColorStop(1, '#040714');
-  ctx.fillStyle = oceanGrad;
-  ctx.fillRect(0, 0, width, height);
-
-  // Subtle longitude & latitude graticule coordinate grid (every 15 degrees)
-  ctx.beginPath();
-  ctx.strokeStyle = 'rgba(56, 189, 248, 0.08)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 24; i++) {
-    const x = (i / 24) * width;
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-  }
-  for (let j = 0; j <= 12; j++) {
-    const y = (j / 12) * height;
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-  }
-  ctx.stroke();
-
-  // Highlight Tropics (23.5 N & 23.5 S) and Polar Circles (66.5 N & 66.5 S)
-  const drawParallel = (latDeg, strokeStyle, dash = []) => {
-    const y = ((90 - latDeg) / 180) * height;
-    ctx.beginPath();
-    ctx.setLineDash(dash);
-    ctx.strokeStyle = strokeStyle;
-    ctx.lineWidth = 1;
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  };
-
-  drawParallel(23.5, 'rgba(56, 189, 248, 0.2)', [4, 4]); // Tropic of Cancer
-  drawParallel(-23.5, 'rgba(56, 189, 248, 0.2)', [4, 4]); // Tropic of Capricorn
-  drawParallel(66.5, 'rgba(148, 163, 184, 0.2)', [2, 4]); // Arctic
-  drawParallel(-66.5, 'rgba(148, 163, 184, 0.2)', [2, 4]); // Antarctic
-
-  // Highlight Equator and Prime Meridian
-  ctx.beginPath();
-  ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)';
-  ctx.lineWidth = 1.5;
-  ctx.moveTo(0, height / 2);
-  ctx.lineTo(width, height / 2); // Equator
-  ctx.moveTo(width / 2, 0);
-  ctx.lineTo(width / 2, height); // Prime Meridian
-  ctx.stroke();
-
-  // Continental landmasses
-  ctx.beginPath();
-  for (let r = 0; r < WORLD_NORMALIZED_RINGS.length; r++) {
-    const ring = WORLD_NORMALIZED_RINGS[r];
-    for (let i = 0; i < ring.length; i++) {
-      const px = ring[i][0] * width;
-      const py = ring[i][1] * height;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-  }
-
-  // Land fill: deep obsidian slate
-  ctx.fillStyle = '#0f172a';
-  ctx.fill();
-
-  // Crisp coastline stroke with luminous cyan edge
-  ctx.strokeStyle = '#38bdf8';
-  ctx.lineWidth = 1.4;
-  ctx.shadowColor = 'rgba(56, 189, 248, 0.5)';
-  ctx.shadowBlur = 4;
-  ctx.stroke();
-  ctx.shadowBlur = 0;
-
-  // Render illuminated night-side city light clusters
-  const drawCityLightCluster = (lng, lat, radius, intensity, color = '#fef08a') => {
-    const cx = ((lng + 180) / 360) * width;
-    const cy = ((90 - lat) / 180) * height;
-
-    const radGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-    radGrad.addColorStop(0, color);
-    radGrad.addColorStop(0.3, 'rgba(251, 191, 36, 0.6)');
-    radGrad.addColorStop(0.7, 'rgba(245, 158, 11, 0.2)');
-    radGrad.addColorStop(1, 'transparent');
-
-    ctx.fillStyle = radGrad;
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.fill();
-  };
-
-  // Major global metropolitan lighting clusters
-  WORLD_CITIES.forEach((city) => {
-    drawCityLightCluster(city.lng, city.lat, 10, 0.9, '#fef08a');
-  });
-
-  // Secondary regional urban constellations
-  const regionalLights = [
-    // US BosWash corridor
-    [-71.0, 42.3], [-75.1, 39.9], [-77.0, 38.9],
-    // US West Coast & Texas
-    [-118.2, 34.0], [-122.3, 47.6], [-95.3, 29.7], [-96.8, 32.7],
-    // Western Europe
-    [4.3, 50.8], [4.9, 52.3], [7.0, 50.9], [9.1, 45.4], [-0.1, 51.5],
-    // East Asia Corridor
-    [135.5, 34.6], [139.7, 35.6], [121.4, 31.2], [113.2, 23.1], [126.9, 37.5],
-    // South / Southeast Asia
-    [77.2, 28.6], [80.2, 13.0], [77.5, 12.9], [100.5, 13.7], [103.8, 1.3],
-    // Middle East
-    [46.7, 24.7], [55.2, 25.2], [51.5, 25.2],
-  ];
-
-  regionalLights.forEach(([lng, lat]) => {
-    drawCityLightCluster(lng, lat, 6, 0.6, 'rgba(253, 224, 71, 0.85)');
-  });
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.anisotropy = 4;
-  return texture;
 }
 
 // Generate Great-Circle 3D curved telemetry arcs between two points
@@ -186,9 +51,13 @@ const WorldGlobe3D = ({
   const cameraRef = useRef(null);
   const markersGroupRef = useRef(null);
   const arcsGroupRef = useRef(null);
+  const cloudsMeshRef = useRef(null);
   const reticleRef = useRef(null);
+  const globeMeshRef = useRef(null);
   const animationFrameRef = useRef(null);
 
+  // View & Layer Controls
+  const [showClouds, setShowClouds] = useState(true);
   const [autoRotate, setAutoRotate] = useState(true);
   const [showArcs, setShowArcs] = useState(true);
   const [showGraticuleRing, setShowGraticuleRing] = useState(true);
@@ -200,10 +69,18 @@ const WorldGlobe3D = ({
   const previousMousePositionRef = useRef({ x: 0, y: 0 });
   const targetRotationRef = useRef({ x: 0.25, y: -0.8 });
   const currentRotationRef = useRef({ x: 0.25, y: -0.8 });
-  const cameraDistanceRef = useRef(260);
+  const cameraDistanceRef = useRef(255);
 
   // Flight particles animated along arcs
   const arcParticlesRef = useRef([]);
+
+  // Textures cache ref
+  const texturesRef = useRef({
+    satellite: null,
+    normal: null,
+    specular: null,
+    clouds: null,
+  });
 
   // Rotate globe smoothly towards coordinates
   const flyToCoord = useCallback((lat, lng) => {
@@ -262,35 +139,68 @@ const WorldGlobe3D = ({
     globeGroupRef.current = globeGroup;
     scene.add(globeGroup);
 
-    // Base Sphere with High-Precision Texture
+    // Load authentic NASA Satellite textures
+    const textureLoader = new THREE.TextureLoader();
+    const satelliteTexture = textureLoader.load('/textures/earth_satellite_2048.jpg');
+    satelliteTexture.anisotropy = 8;
+    const normalTexture = textureLoader.load('/textures/earth_normal_2048.jpg');
+    normalTexture.anisotropy = 4;
+    const specularTexture = textureLoader.load('/textures/earth_specular_2048.jpg');
+    const cloudsTexture = textureLoader.load('/textures/earth_clouds_1024.png');
+
+    texturesRef.current = {
+      satellite: satelliteTexture,
+      normal: normalTexture,
+      specular: specularTexture,
+      clouds: cloudsTexture,
+    };
+
+    // Base Earth Sphere with authentic NASA Satellite imagery
     const globeGeometry = new THREE.SphereGeometry(GLOBE_RADIUS, 64, 64);
-    const globeTexture = createDetailedWorldTexture();
-    const globeMaterial = new THREE.MeshStandardMaterial({
-      map: globeTexture,
-      roughness: 0.75,
-      metalness: 0.15,
+    const globeMaterial = new THREE.MeshPhongMaterial({
+      map: satelliteTexture,
+      bumpMap: normalTexture,
+      bumpScale: 0.06,
+      specularMap: specularTexture,
+      specular: new THREE.Color(0x38bdf8),
+      shininess: 32,
     });
     const globeMesh = new THREE.Mesh(globeGeometry, globeMaterial);
     globeMesh.name = 'globe_sphere';
+    globeMeshRef.current = globeMesh;
     globeGroup.add(globeMesh);
 
-    // Inner Atmospheric Glow Shell
-    const atmoGeom = new THREE.SphereGeometry(GLOBE_RADIUS * 1.018, 48, 48);
-    const atmoMat = new THREE.MeshBasicMaterial({
-      color: 0x0284c7,
+    // Realistic Atmospheric Clouds Layer
+    const cloudsGeom = new THREE.SphereGeometry(GLOBE_RADIUS * 1.01, 64, 64);
+    const cloudsMat = new THREE.MeshStandardMaterial({
+      map: cloudsTexture,
       transparent: true,
-      opacity: 0.12,
+      opacity: 0.75,
+      blending: THREE.NormalBlending,
+      depthWrite: false,
+    });
+    const cloudsMesh = new THREE.Mesh(cloudsGeom, cloudsMat);
+    cloudsMesh.name = 'globe_clouds';
+    cloudsMeshRef.current = cloudsMesh;
+    globeGroup.add(cloudsMesh);
+
+    // Inner Atmospheric Glow Shell (Rayleigh scattering)
+    const atmoGeom = new THREE.SphereGeometry(GLOBE_RADIUS * 1.025, 48, 48);
+    const atmoMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.16,
       side: THREE.BackSide,
     });
     const atmoMesh = new THREE.Mesh(atmoGeom, atmoMat);
     globeGroup.add(atmoMesh);
 
     // Outer Celestial Rim Halo
-    const haloGeom = new THREE.SphereGeometry(GLOBE_RADIUS * 1.055, 32, 32);
+    const haloGeom = new THREE.SphereGeometry(GLOBE_RADIUS * 1.065, 32, 32);
     const haloMat = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
+      color: 0x0284c7,
       transparent: true,
-      opacity: 0.05,
+      opacity: 0.07,
       side: THREE.BackSide,
     });
     const haloMesh = new THREE.Mesh(haloGeom, haloMat);
@@ -309,38 +219,38 @@ const WorldGlobe3D = ({
     eqRing.name = 'equatorial_ring';
     globeGroup.add(eqRing);
 
-    // Starfield particles in deep space
-    const starsCount = 500;
+    // Deep Space Starfield
+    const starsCount = 650;
     const starGeom = new THREE.BufferGeometry();
     const starPositions = new Float32Array(starsCount * 3);
     for (let i = 0; i < starsCount * 3; i += 3) {
-      starPositions[i] = (Math.random() - 0.5) * 900;
-      starPositions[i + 1] = (Math.random() - 0.5) * 900;
-      starPositions[i + 2] = -180 - Math.random() * 350;
+      starPositions[i] = (Math.random() - 0.5) * 1100;
+      starPositions[i + 1] = (Math.random() - 0.5) * 1100;
+      starPositions[i + 2] = -160 - Math.random() * 400;
     }
     starGeom.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
     const starMat = new THREE.PointsMaterial({
-      color: 0x94a3b8,
-      size: 1.4,
+      color: 0xe2e8f0,
+      size: 1.2,
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.6,
     });
     const stars = new THREE.Points(starGeom, starMat);
     scene.add(stars);
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
+    // Natural Sunlight & Ambient Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.25);
     scene.add(ambientLight);
 
-    const keyLight = new THREE.DirectionalLight(0xffffff, 1.8);
-    keyLight.position.set(300, 180, 250);
-    scene.add(keyLight);
+    const sunLight = new THREE.DirectionalLight(0xfffdf5, 2.2);
+    sunLight.position.set(320, 200, 260);
+    scene.add(sunLight);
 
-    const rimLight = new THREE.DirectionalLight(0x38bdf8, 0.9);
-    rimLight.position.set(-300, -120, -200);
+    const rimLight = new THREE.DirectionalLight(0x38bdf8, 0.85);
+    rimLight.position.set(-320, -120, -220);
     scene.add(rimLight);
 
-    // Telemetry Great-Circle Arcs Group
+    // Great-Circle Telemetry Arcs
     const arcsGroup = new THREE.Group();
     arcsGroupRef.current = arcsGroup;
     globeGroup.add(arcsGroup);
@@ -353,8 +263,8 @@ const WorldGlobe3D = ({
       const toCity = cityMap.get(route.to);
       if (!fromCity || !toCity) return;
 
-      const p1 = latLngToVector3(fromCity.lat, fromCity.lng, GLOBE_RADIUS * 1.01);
-      const p2 = latLngToVector3(toCity.lat, toCity.lng, GLOBE_RADIUS * 1.01);
+      const p1 = latLngToVector3(fromCity.lat, fromCity.lng, GLOBE_RADIUS * 1.015);
+      const p2 = latLngToVector3(toCity.lat, toCity.lng, GLOBE_RADIUS * 1.015);
 
       const curve = createArcCurve(p1, p2, 16);
       const points = curve.getPoints(50);
@@ -362,12 +272,12 @@ const WorldGlobe3D = ({
       const arcMat = new THREE.LineBasicMaterial({
         color: new THREE.Color(route.color || 0x38bdf8),
         transparent: true,
-        opacity: 0.35,
+        opacity: 0.45,
       });
       const arcLine = new THREE.Line(arcGeom, arcMat);
       arcsGroup.add(arcLine);
 
-      // Moving energy packet on the arc
+      // Pulse packet traveling along satellite trajectory
       const packetGeom = new THREE.SphereGeometry(1.2, 8, 8);
       const packetMat = new THREE.MeshBasicMaterial({
         color: new THREE.Color(route.color || 0xffffff),
@@ -385,17 +295,16 @@ const WorldGlobe3D = ({
 
     arcParticlesRef.current = particles;
 
-    // City Markers Group
+    // City Surface Markers Group
     const markersGroup = new THREE.Group();
     markersGroupRef.current = markersGroup;
     globeGroup.add(markersGroup);
 
-    // Marker geometry & materials
     const pinGeom = new THREE.SphereGeometry(1.6, 12, 12);
     const ringGeom = new THREE.RingGeometry(2.4, 3.2, 20);
 
     WORLD_CITIES.forEach((city) => {
-      const pos = latLngToVector3(city.lat, city.lng, GLOBE_RADIUS * 1.01);
+      const pos = latLngToVector3(city.lat, city.lng, GLOBE_RADIUS * 1.016);
 
       // Core pin
       const pinMat = new THREE.MeshBasicMaterial({
@@ -406,19 +315,19 @@ const WorldGlobe3D = ({
       pinMesh.userData = { city, isPin: true };
       markersGroup.add(pinMesh);
 
-      // Surface ring oriented normal to surface
+      // Normal oriented ground ring
       const ringMat = new THREE.MeshBasicMaterial({
         color: new THREE.Color(city.color || 0x38bdf8),
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: 0.5,
+        opacity: 0.6,
       });
       const ringMesh = new THREE.Mesh(ringGeom, ringMat);
       ringMesh.position.copy(pos.clone().multiplyScalar(1.002));
       ringMesh.lookAt(pos.clone().multiplyScalar(2));
       markersGroup.add(ringMesh);
 
-      // Vertical altitude beacon stalk
+      // Telemetry beacon stalk
       const stalkGeom = new THREE.BufferGeometry().setFromPoints([
         pos,
         pos.clone().multiplyScalar(1.045),
@@ -426,13 +335,13 @@ const WorldGlobe3D = ({
       const stalkMat = new THREE.LineBasicMaterial({
         color: new THREE.Color(city.color || 0x38bdf8),
         transparent: true,
-        opacity: 0.6,
+        opacity: 0.7,
       });
       const stalk = new THREE.Line(stalkGeom, stalkMat);
       markersGroup.add(stalk);
     });
 
-    // 3D Animated Targeting Reticle for Selected City
+    // Targeting Crosshairs Reticle for Selected City
     const reticleGroup = new THREE.Group();
     const reticleRingGeom = new THREE.RingGeometry(4.5, 5.2, 32);
     const reticleRingMat = new THREE.MeshBasicMaterial({
@@ -444,7 +353,6 @@ const WorldGlobe3D = ({
     const reticleRing = new THREE.Mesh(reticleRingGeom, reticleRingMat);
     reticleGroup.add(reticleRing);
 
-    // Crosshairs lines
     const reticleCrossGeom = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(-7, 0, 0),
       new THREE.Vector3(7, 0, 0),
@@ -481,12 +389,17 @@ const WorldGlobe3D = ({
     const animate = (time) => {
       animationFrameRef.current = requestAnimationFrame(animate);
 
-      // Auto-rotation when not dragging
+      // Auto-rotation of Earth
       if (autoRotate && !isDraggingRef.current) {
-        targetRotationRef.current.y += 0.0018;
+        targetRotationRef.current.y += 0.0016;
       }
 
-      // Smooth camera spherical interpolation (lerp)
+      // Independent dynamic atmospheric cloud rotation
+      if (cloudsMeshRef.current && showClouds) {
+        cloudsMeshRef.current.rotation.y += 0.00035;
+      }
+
+      // Smooth camera interpolation
       currentRotationRef.current.x +=
         (targetRotationRef.current.x - currentRotationRef.current.x) * 0.08;
       currentRotationRef.current.y +=
@@ -509,7 +422,7 @@ const WorldGlobe3D = ({
         const targetPos = latLngToVector3(
           selectedCity.lat,
           selectedCity.lng,
-          GLOBE_RADIUS * 1.05
+          GLOBE_RADIUS * 1.055
         );
         reticleRef.current.position.copy(targetPos);
         reticleRef.current.lookAt(targetPos.clone().multiplyScalar(2));
@@ -529,13 +442,21 @@ const WorldGlobe3D = ({
       resizeObserver.disconnect();
       renderer.dispose();
       globeGeometry.dispose();
-      globeTexture.dispose();
       globeMaterial.dispose();
+      cloudsGeom.dispose();
+      cloudsMat.dispose();
       if (container && renderer.domElement) {
         container.innerHTML = '';
       }
     };
-  }, [autoRotate, selectedCity]);
+  }, [autoRotate, selectedCity, showClouds]);
+
+  // Update cloud visibility
+  useEffect(() => {
+    if (cloudsMeshRef.current) {
+      cloudsMeshRef.current.visible = showClouds;
+    }
+  }, [showClouds]);
 
   // Update equatorial ring visibility
   useEffect(() => {
@@ -657,7 +578,7 @@ const WorldGlobe3D = ({
   const handleWheel = (e) => {
     e.preventDefault();
     cameraDistanceRef.current = Math.max(
-      160,
+      150,
       Math.min(420, cameraDistanceRef.current + e.deltaY * 0.25)
     );
     if (cameraRef.current) {
@@ -667,7 +588,7 @@ const WorldGlobe3D = ({
 
   const handleZoom = (direction) => {
     cameraDistanceRef.current = Math.max(
-      160,
+      150,
       Math.min(420, cameraDistanceRef.current + direction * 35)
     );
     if (cameraRef.current) {
@@ -677,9 +598,9 @@ const WorldGlobe3D = ({
 
   const handleResetView = () => {
     targetRotationRef.current = { x: 0.25, y: -0.8 };
-    cameraDistanceRef.current = 260;
+    cameraDistanceRef.current = 255;
     if (cameraRef.current) {
-      cameraRef.current.position.z = 260;
+      cameraRef.current.position.z = 255;
     }
   };
 
@@ -699,11 +620,11 @@ const WorldGlobe3D = ({
         onWheel={handleWheel}
       />
 
-      {/* Top Left: Observatory Aerospace Telemetry HUD */}
+      {/* Top Left: NASA Satellite Orbit Telemetry HUD */}
       <div className="absolute top-4 left-4 pointer-events-none flex flex-col gap-1.5 font-mono text-[11px] text-slate-300 bg-slate-950/85 backdrop-blur-md px-3.5 py-2.5 rounded-xl border border-slate-800 shadow-xl">
         <div className="flex items-center gap-2 text-cyan-400 font-semibold tracking-wider uppercase text-[10px]">
           <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-          <span>Orbital Telemetry</span>
+          <span>NASA Blue Marble Satellite</span>
         </div>
         <div className="flex items-center gap-3 text-slate-400 text-[10px]">
           <span>
@@ -721,13 +642,26 @@ const WorldGlobe3D = ({
             </strong>
           </span>
           <span className="hidden sm:inline">
-            ALT: <strong className="text-slate-200">100 KM</strong>
+            ALT: <strong className="text-slate-200">35,786 KM (GEO)</strong>
           </span>
         </div>
       </div>
 
-      {/* Top Right: View & Layer Controls */}
+      {/* Top Right: Layer & Satellite Controls */}
       <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-slate-950/85 backdrop-blur-md p-1.5 rounded-xl border border-slate-800 shadow-xl">
+        {/* Toggle Atmospheric Cloud Layer */}
+        <button
+          onClick={() => setShowClouds(!showClouds)}
+          className={`p-2 rounded-lg text-xs font-semibold transition-all ${
+            showClouds
+              ? 'bg-cyan-950/70 text-cyan-400 border border-cyan-800/60'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+          }`}
+          title={showClouds ? 'Hide Cloud Layer' : 'Show Atmospheric Clouds'}
+        >
+          <Cloud className="w-4 h-4" />
+        </button>
+
         {/* Toggle Telemetry Arcs */}
         <button
           onClick={() => setShowArcs(!showArcs)}
@@ -741,7 +675,7 @@ const WorldGlobe3D = ({
           <Radio className="w-4 h-4" />
         </button>
 
-        {/* Toggle Equatorial Horizon Ring */}
+        {/* Toggle Equatorial Ring */}
         <button
           onClick={() => setShowGraticuleRing(!showGraticuleRing)}
           className={`p-2 rounded-lg text-xs font-semibold transition-all ${
@@ -777,7 +711,7 @@ const WorldGlobe3D = ({
         </button>
       </div>
 
-      {/* Bottom Right: Precision Zoom Floating Controls */}
+      {/* Bottom Right: Precision Zoom Controls */}
       <div className="absolute bottom-4 right-4 flex flex-col gap-1.5 bg-slate-950/85 backdrop-blur-md p-1.5 rounded-xl border border-slate-800 shadow-xl">
         <button
           onClick={() => handleZoom(-1)}

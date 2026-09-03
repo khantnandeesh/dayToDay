@@ -110,10 +110,10 @@ const WorldTimeExplorer = () => {
         <div>
           <div className="flex items-center gap-2 text-cyan-400 font-mono text-[11px] uppercase tracking-wider font-semibold">
             <Activity className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Planetary Time Synchronizer & 3D Celestial Globe</span>
+            <span>Planetary Satellite Telemetry & Precision Chronometer</span>
           </div>
           <h2 className="text-xl md:text-2xl font-bold tracking-tight text-white mt-0.5">
-            World Chronometer
+            NASA Satellite World Instrument
           </h2>
         </div>
 
@@ -147,7 +147,7 @@ const WorldTimeExplorer = () => {
               }`}
             >
               <Globe className="w-3.5 h-3.5" />
-              <span>3D Planet</span>
+              <span>3D Satellite</span>
             </button>
             <button
               onClick={() => setViewMode('map')}
@@ -158,7 +158,7 @@ const WorldTimeExplorer = () => {
               }`}
             >
               <MapIcon className="w-3.5 h-3.5" />
-              <span>2D Grid</span>
+              <span>2D Satellite</span>
             </button>
           </div>
 
