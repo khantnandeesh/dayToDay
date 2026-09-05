@@ -24,6 +24,8 @@
     "globals": "^16.5.0",
     "lucide-react": "^0.556.0",
     "monaco-editor": "^0.56.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-pdf": "^10.2.0",
