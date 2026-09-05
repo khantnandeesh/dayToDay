@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { LogOut, User, Shield, LayoutDashboard, HardDrive, Search, Command, Code2 } from 'lucide-react';
+import { LogOut, User, Shield, LayoutDashboard, HardDrive, Search, Command, Code2, FileEdit } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useVault } from '../context/VaultContext';
 import api from '../config/api';
@@ -126,6 +126,19 @@ const Navbar = () => {
                         >
                             <Code2 className="w-4 h-4" />
                             <span className="hidden lg:block">Code</span>
+                        </Link>
+
+                        <Link
+                            to="/pdf-editor"
+                            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors
+                                ${isActive('/pdf-editor')
+                                    ? 'bg-slate-100 text-slate-900'
+                                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                                }`}
+                            title="Sejda PDF Editor"
+                        >
+                            <FileEdit className="w-4 h-4 text-cyan-600" />
+                            <span className="hidden lg:block">PDF Editor</span>
                         </Link>
 
                         <Link

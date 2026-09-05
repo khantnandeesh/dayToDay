@@ -14,6 +14,7 @@ import authRoutes from './routes/authRoutes.js';
 import vaultRoutes from './routes/vaultRoutes.js';
 import driveRoutes from './routes/driveRoutes.js';
 import codeRoutes from './routes/codeRoutes.js';
+import pdfRoutes from './routes/pdfRoutes.js';
 import { languageServerManager } from './services/lsp/languageServerManager.js';
 import AllowedOrigin from './models/AllowedOrigin.js';
 import { checkEmailProviders } from './config/email.js';
@@ -312,6 +313,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/vault', vaultRoutes);
 app.use('/api/drive', driveRoutes);
 app.use('/api/code', codeRoutes);
+app.use('/api/pdf', pdfRoutes);
 
 // Health check
 app.get('/health', async (req, res) => {

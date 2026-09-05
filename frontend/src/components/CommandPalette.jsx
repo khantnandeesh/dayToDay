@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
     Search, LayoutDashboard, Shield, HardDrive, User, LogOut,
-    ArrowRight, Lock, Sparkles, Code2
+    ArrowRight, Lock, Sparkles, Code2, FileEdit
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useVault } from '../context/VaultContext';
@@ -73,6 +73,15 @@ const CommandPalette = ({ isOpen, onClose }) => {
             type: 'navigation',
             path: '/code',
             shortcut: 'G C'
+        },
+        {
+            id: 'pdf-editor',
+            label: 'Sejda PDF Editor',
+            desc: 'In-place PDF content editor & text reconstructor (Heroku Node.js compatible)',
+            icon: FileEdit,
+            type: 'navigation',
+            path: '/pdf-editor',
+            shortcut: 'G E'
         },
         {
             id: 'profile',

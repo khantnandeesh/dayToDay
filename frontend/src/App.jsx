@@ -14,6 +14,7 @@ import SecureDrive from './pages/SecureDrive';
 import Code from './pages/Code';
 import PublicShare from './pages/PublicShare';
 import VaultAccessPage from './pages/VaultAccessPage';
+import PdfEditorPage from './pages/PdfEditorPage';
 
 function App() {
   return (
@@ -77,6 +78,10 @@ function App() {
                   <Code />
                 </ProtectedRoute>
               }
+            />
+            <Route
+              path="/pdf-editor"
+              element={<PdfEditorPage />}
             />
             <Route
               path="/profile"

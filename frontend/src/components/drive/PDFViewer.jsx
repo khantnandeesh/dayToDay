@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Document, Page, pdfjs } from 'react-pdf';
 import {
     ZoomIn, ZoomOut, RotateCw, Download, Printer, Search,
     ChevronLeft, ChevronRight, X, Menu,
-    Minimize, Maximize
+    Minimize, Maximize, FileEdit
 } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -15,6 +16,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 const PDFViewer = ({ url, onClose, fileName = "Document.pdf" }) => {
+    const navigate = useNavigate();
     const [numPages, setNumPages] = useState(null);
     const [pageNumber, setPageNumber] = useState(1);
     const [scale, setScale] = useState(1.0);
@@ -168,6 +170,18 @@ const PDFViewer = ({ url, onClose, fileName = "Document.pdf" }) => {
 
                 {/* Right: Tools & Actions */}
                 <div className="flex items-center justify-end gap-2 w-1/4">
+                    <button
+                        onClick={() => {
+                            if (onClose) onClose();
+                            navigate('/pdf-editor', { state: { fileUrl: url, fileName } });
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-medium shadow transition"
+                        title="Edit in Sejda PDF Editor"
+                    >
+                        <FileEdit className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Edit PDF</span>
+                    </button>
+                    <div className="h-6 w-px bg-gray-600 mx-1"></div>
                     <button onClick={rotate} className="p-2 hover:bg-gray-700 rounded transition text-gray-400 hover:text-white" title="Rotate">
                         <RotateCw className="w-5 h-5" />
                     </button>
