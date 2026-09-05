@@ -14,9 +14,24 @@ if (typeof window !== 'undefined') {
  * Loads and parses a PDF from an ArrayBuffer or File
  */
 export async function parsePdfDocument(arrayBuffer) {
-  const uint8 = new Uint8Array(arrayBuffer);
+  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+    throw new Error('PDF file buffer is empty or corrupted.');
+  }
+
+  // Deep clone the incoming buffer so that the PDF.js Web Worker never
+  // detaches the main thread's copy of rawBytes during transfer!
+  const srcBytes = arrayBuffer instanceof Uint8Array ? arrayBuffer : new Uint8Array(arrayBuffer);
+  
+  // Untouched, persistent copy for editing & export reconstruction
+  const preservedRawBytes = new Uint8Array(srcBytes.byteLength);
+  preservedRawBytes.set(srcBytes);
+
+  // Dedicated worker copy
+  const workerBytes = new Uint8Array(srcBytes.byteLength);
+  workerBytes.set(srcBytes);
+
   const loadingTask = pdfjsLib.getDocument({
-    data: uint8,
+    data: workerBytes,
     useSystemFonts: true,
   });
 
@@ -74,7 +89,7 @@ export async function parsePdfDocument(arrayBuffer) {
     pdfDoc,
     numPages,
     pages: pagesData,
-    rawBytes: uint8,
+    rawBytes: preservedRawBytes,
   };
 }
 
@@ -222,38 +237,62 @@ export async function fetchSamplePdf(type = 'invoice') {
 
 /**
  * Exports modified PDF:
- * Sends original PDF + edits payload to backend for server-side reconstruction,
- * with pure client-side fallback if network error occurs!
+ * 1. Performs high-speed in-browser vector reconstruction using pdf-lib with full font embedding
+ * 2. If browser reconstruction encounters any issue, falls back seamlessly to the backend /api/pdf/edit API
  */
 export async function exportModifiedPdf(originalArrayBuffer, edits, filename = 'edited-document.pdf') {
+  if (!originalArrayBuffer || originalArrayBuffer.byteLength === 0) {
+    throw new Error('Original PDF buffer is empty or was not retained. Please reload the document.');
+  }
+
+  // Ensure an independent, untouched Uint8Array copy
+  const src = originalArrayBuffer instanceof Uint8Array 
+    ? originalArrayBuffer 
+    : new Uint8Array(originalArrayBuffer);
+
+  const cleanBytes = new Uint8Array(src.byteLength);
+  cleanBytes.set(src);
+
+  // 1. Prioritize fast, zero-latency client-side reconstruction
   try {
-    // 1. Send to Heroku Node.js backend
+    const localResult = await clientSideReconstructPdf(cleanBytes, edits);
+    if (localResult && localResult.byteLength > 0) {
+      return localResult;
+    }
+  } catch (clientErr) {
+    console.warn('In-browser reconstruction encountered an issue, trying backend API:', clientErr);
+  }
+
+  // 2. Fallback to Node.js backend reconstruction
+  try {
     const formData = new FormData();
-    const blob = new Blob([originalArrayBuffer], { type: 'application/pdf' });
+    const blob = new Blob([cleanBytes], { type: 'application/pdf' });
     formData.append('pdf', blob, filename);
     formData.append('edits', JSON.stringify(edits));
     formData.append('filename', filename);
 
+    // Note: Do not set Content-Type manually so browser sets multipart boundary automatically
     const response = await api.post('/pdf/edit', formData, {
       responseType: 'blob',
       headers: {
-        'Content-Type': 'multipart/form-data',
+        'Content-Type': undefined,
       },
     });
 
-    return new Uint8Array(await response.data.arrayBuffer());
-  } catch (err) {
-    console.warn('Backend export failed, executing in-browser client-side reconstruction fallback:', err);
-    // 2. Client-side reconstruction fallback with pdf-lib
-    return await clientSideReconstructPdf(originalArrayBuffer, edits);
+    const arrayBuffer = await response.data.arrayBuffer();
+    return new Uint8Array(arrayBuffer);
+  } catch (backendErr) {
+    console.error('Backend export fallback failed:', backendErr);
+    throw new Error(backendErr.response?.data?.message || backendErr.message || 'PDF export failed');
   }
 }
 
 /**
  * Client-side PDF reconstruction using browser pdf-lib
  */
-async function clientSideReconstructPdf(originalArrayBuffer, edits) {
-  const doc = await PDFDocument.load(originalArrayBuffer, { ignoreEncryption: true });
+async function clientSideReconstructPdf(originalBytes, edits) {
+  const bytes = originalBytes instanceof Uint8Array ? originalBytes : new Uint8Array(originalBytes);
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
   const pages = doc.getPages();
 
   const fontCache = new Map();
@@ -283,12 +322,26 @@ async function clientSideReconstructPdf(originalArrayBuffer, edits) {
       if (op.type === 'replace' || op.type === 'delete') {
         const bg = op.backgroundColor || { r: 1, g: 1, b: 1 };
         const pad = 1.5;
+        const origHeight = Math.max(10, Number(op.originalHeight) || 14);
+        const origWidth = Math.max(20, Number(op.originalWidth) || 50);
+        const origX = Number(op.originalX) || 0;
+        const origY = Number(op.originalY) || 0;
+
+        // Cover descenders that fall below the baseline
+        const descenderPad = Math.min(4, Math.max(1.5, origHeight * 0.25));
+        const patchY = Math.max(0, origY - descenderPad);
+        const patchHeight = origHeight + descenderPad + pad;
+
+        const r = typeof bg.r === 'number' ? Math.max(0, Math.min(1, bg.r)) : 1;
+        const g = typeof bg.g === 'number' ? Math.max(0, Math.min(1, bg.g)) : 1;
+        const b = typeof bg.b === 'number' ? Math.max(0, Math.min(1, bg.b)) : 1;
+
         page.drawRectangle({
-          x: Math.max(0, op.originalX - pad),
-          y: Math.max(0, op.originalY - pad),
-          width: (op.originalWidth || 50) + pad * 2,
-          height: (op.originalHeight || 14) + pad * 2,
-          color: rgb(bg.r, bg.g, bg.b),
+          x: Math.max(0, origX - pad),
+          y: patchY,
+          width: origWidth + pad * 2,
+          height: patchHeight,
+          color: rgb(r, g, b),
         });
       }
 
@@ -300,8 +353,12 @@ async function clientSideReconstructPdf(originalArrayBuffer, edits) {
         const font = await getFont(op.fontFamily, op.isBold, op.isItalic);
         const fontSize = Math.max(6, Number(op.fontSize) || 12);
         const col = op.color || { r: 0, g: 0, b: 0 };
-        const x = op.newX !== undefined ? op.newX : op.originalX;
-        const y = op.newY !== undefined ? op.newY : op.originalY;
+        const x = op.newX !== undefined ? Number(op.newX) : (Number(op.originalX) || 0);
+        const y = op.newY !== undefined ? Number(op.newY) : (Number(op.originalY) || 0);
+
+        const cr = typeof col.r === 'number' ? Math.max(0, Math.min(1, col.r)) : 0;
+        const cg = typeof col.g === 'number' ? Math.max(0, Math.min(1, col.g)) : 0;
+        const cb = typeof col.b === 'number' ? Math.max(0, Math.min(1, col.b)) : 0;
 
         const lines = text.split('\n');
         lines.forEach((line, idx) => {
@@ -311,7 +368,7 @@ async function clientSideReconstructPdf(originalArrayBuffer, edits) {
             y: y - (idx * fontSize * 1.25),
             size: fontSize,
             font,
-            color: rgb(col.r, col.g, col.b),
+            color: rgb(cr, cg, cb),
           });
         });
       }

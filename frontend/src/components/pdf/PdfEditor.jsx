@@ -115,7 +115,11 @@ export default function PdfEditor({ initialPdfUrl = null, initialFilename = null
       setError(null);
       setLoadingStatus('Parsing document content streams...');
 
-      const parsed = await parsePdfDocument(buffer);
+      const srcBytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+      const cleanCopy = new Uint8Array(srcBytes.byteLength);
+      cleanCopy.set(srcBytes);
+
+      const parsed = await parsePdfDocument(cleanCopy);
       setPdfData(parsed);
       setFilename(name);
       setCurrentPage(1);
