@@ -1,1 +1,24 @@
-{ "routes": [{ "src": "/[^.]+", "dest": "/", "status": 200 }] }
+{
+  "rewrites": [
+    {
+      "source": "/api/:match*",
+      "destination": "https://daytoday-backend-90e6c0a7d7b8.herokuapp.com/api/:match*"
+    },
+    {
+      "source": "/mcp/:match*",
+      "destination": "https://daytoday-backend-90e6c0a7d7b8.herokuapp.com/mcp/:match*"
+    },
+    {
+      "source": "/.well-known/:match*",
+      "destination": "https://daytoday-backend-90e6c0a7d7b8.herokuapp.com/.well-known/:match*"
+    },
+    {
+      "source": "/oauth/:match*",
+      "destination": "https://daytoday-backend-90e6c0a7d7b8.herokuapp.com/oauth/:match*"
+    },
+    {
+      "source": "/((?!api|mcp|oauth|assets|static|.*\\..*).*)$",
+      "destination": "/index.html"
+    }
+  ]
+}

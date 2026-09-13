@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { getOrCreateDeviceId, getClientDeviceDisplayName } from '../utils/deviceIdentity';
 
-const getBackendBaseUrl = () => {
+export const getBackendBaseUrl = () => {
   if (import.meta.env.VITE_BACKEND_URL !== undefined && import.meta.env.VITE_BACKEND_URL !== '') {
     return import.meta.env.VITE_BACKEND_URL;
   }

@@ -1,15 +1,22 @@
 import axios from 'axios';
+import { getBackendBaseUrl } from '../../config/api';
+
+const getAdminBaseUrl = () => {
+  const backendBase = getBackendBaseUrl();
+  return backendBase ? `${backendBase}/api/admin` : '/api/admin';
+};
 
 const api = axios.create({
-  baseURL: '/api/admin',
+  baseURL: getAdminBaseUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
   withCredentials: true,
 });
 
-// Attach admin token from localStorage or cookie if present
+// Attach dynamic baseURL and admin token from localStorage or cookie if present
 api.interceptors.request.use((config) => {
+  config.baseURL = getAdminBaseUrl();
   const token = localStorage.getItem('admin_token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
