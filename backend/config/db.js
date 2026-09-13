@@ -1,23 +1,52 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import { seedInitialData } from './seedAdmin.js';
 
 dotenv.config();
 
+let isInMemoryDb = false;
+let mongoMemoryServerInstance = null;
+
+export const getDbStatus = () => {
+  return {
+    connected: mongoose.connection.readyState === 1,
+    isInMemory: isInMemoryDb,
+    host: mongoose.connection.host || 'none',
+    readyState: mongoose.connection.readyState,
+  };
+};
+
 const connectDB = async () => {
-  if (!process.env.MONGODB_URI) {
-    console.warn('⚠️ MONGODB_URI is not configured in environment. Database features will be limited.');
-    return;
+  if (process.env.MONGODB_URI) {
+    try {
+      const conn = await mongoose.connect(process.env.MONGODB_URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+      });
+      isInMemoryDb = false;
+      console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+      await seedInitialData();
+      return conn;
+    } catch (error) {
+      console.error(`⚠️ Error connecting to configured MongoDB: ${error.message}`);
+      console.warn('Falling back to In-Memory MongoDB engine...');
+    }
   }
+
   try {
-    const conn = await mongoose.connect(process.env.MONGODB_URI, {
+    const { MongoMemoryServer } = await import('mongodb-memory-server');
+    mongoMemoryServerInstance = await MongoMemoryServer.create();
+    const uri = mongoMemoryServerInstance.getUri();
+    const conn = await mongoose.connect(uri, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });
-
-    console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
-  } catch (error) {
-    console.error(`⚠️ Error connecting to MongoDB: ${error.message}`);
-    console.warn('Server will continue running with degraded database features.');
+    isInMemoryDb = true;
+    console.log(`✅ In-Memory MongoDB Engine Started & Connected (${uri})`);
+    await seedInitialData();
+    return conn;
+  } catch (memError) {
+    console.error('❌ Failed to initialize database:', memError.message);
   }
 };
 

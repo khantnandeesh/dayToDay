@@ -71,41 +71,6 @@ export default function PdfEditor({ initialPdfUrl = null, initialFilename = null
     }
   }, [successMessage]);
 
-  // Load initial sample or provided PDF on mount
-  useEffect(() => {
-    if (initialPdfUrl) {
-      loadPdfFromUrl(initialPdfUrl, initialFilename || 'Document.pdf');
-    } else {
-      loadSampleInvoice();
-    }
-  }, [initialPdfUrl]);
-
-  // Push state to Undo/Redo history
-  const pushHistory = (newEdits) => {
-    const trimmed = history.slice(0, historyIndex + 1);
-    setHistory([...trimmed, newEdits]);
-    setHistoryIndex(trimmed.length);
-  };
-
-  const handleUndo = () => {
-    if (historyIndex > 0) {
-      const prev = history[historyIndex - 1];
-      setHistoryIndex(historyIndex - 1);
-      setPageEdits(prev);
-    } else if (historyIndex === 0) {
-      setHistoryIndex(-1);
-      setPageEdits({});
-    }
-  };
-
-  const handleRedo = () => {
-    if (historyIndex < history.length - 1) {
-      const next = history[historyIndex + 1];
-      setHistoryIndex(historyIndex + 1);
-      setPageEdits(next);
-    }
-  };
-
   // --------------------------------------------------------------------------
   // Document Loading Handlers
   // --------------------------------------------------------------------------
@@ -164,6 +129,45 @@ export default function PdfEditor({ initialPdfUrl = null, initialFilename = null
       console.error('Sample load error:', err);
       setError('Failed to load sample invoice: ' + err.message);
       setLoading(false);
+    }
+  };
+
+  // Load initial sample or provided PDF on mount
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (initialPdfUrl) {
+        loadPdfFromUrl(initialPdfUrl, initialFilename || 'Document.pdf');
+      } else {
+        loadSampleInvoice();
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPdfUrl]);
+
+  // Push state to Undo/Redo history
+  const pushHistory = (newEdits) => {
+    const trimmed = history.slice(0, historyIndex + 1);
+    setHistory([...trimmed, newEdits]);
+    setHistoryIndex(trimmed.length);
+  };
+
+  const handleUndo = () => {
+    if (historyIndex > 0) {
+      const prev = history[historyIndex - 1];
+      setHistoryIndex(historyIndex - 1);
+      setPageEdits(prev);
+    } else if (historyIndex === 0) {
+      setHistoryIndex(-1);
+      setPageEdits({});
+    }
+  };
+
+  const handleRedo = () => {
+    if (historyIndex < history.length - 1) {
+      const next = history[historyIndex + 1];
+      setHistoryIndex(historyIndex + 1);
+      setPageEdits(next);
     }
   };
 

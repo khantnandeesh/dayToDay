@@ -15,6 +15,7 @@ import Code from './pages/Code';
 import PublicShare from './pages/PublicShare';
 import VaultAccessPage from './pages/VaultAccessPage';
 import PdfEditorPage from './pages/PdfEditorPage';
+import AdminApp from './admin/AdminApp';
 
 function App() {
   return (
@@ -22,6 +23,9 @@ function App() {
       <VaultProvider>
         <Router>
           <Routes>
+            {/* Admin Panel Routes */}
+            <Route path="/admin/*" element={<AdminApp />} />
+
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route
               path="/login"

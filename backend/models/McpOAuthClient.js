@@ -20,6 +20,23 @@ const mcpOAuthClientSchema = new mongoose.Schema(
       enum: ['client_secret_basic', 'client_secret_post', 'none'],
       default: 'client_secret_basic',
     },
+    status: {
+      type: String,
+      enum: ['active', 'revoked'],
+      default: 'active',
+      index: true,
+    },
+    lastUsed: {
+      type: Date,
+    },
+    description: {
+      type: String,
+      maxlength: 500,
+    },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
   },
   { timestamps: true }
 );

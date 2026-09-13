@@ -3,10 +3,12 @@ import User from '../models/User.js';
 import Session from '../models/Session.js';
 import { send2FACode, sendWelcomeEmail, sendLoginAlert, checkEmailProviders } from '../config/email.js';
 import { parseDeviceInfo } from '../utils/deviceParser.js';
+import { getJwtSecret } from '../middleware/auth.js';
+import { logAuditEvent, getClientIp } from '../services/auditService.js';
 
 // Generate JWT token
 const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
+  return jwt.sign({ id }, getJwtSecret(), {
     expiresIn: '30d',
   });
 };
@@ -88,15 +90,50 @@ export const login = async (req, res) => {
     // Check for user
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
+      await logAuditEvent({
+        level: 'WARN',
+        event: 'FAILED_LOGIN',
+        user: email,
+        result: 'Failed',
+        message: 'Invalid email address provided',
+        req,
+      });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
       });
     }
 
+    if (!user.isActive) {
+      await logAuditEvent({
+        level: 'WARN',
+        event: 'FAILED_LOGIN',
+        user: email,
+        userId: user._id,
+        result: 'Blocked',
+        message: 'Attempted login on disabled account',
+        req,
+      });
+      return res.status(403).json({
+        success: false,
+        message: 'Account has been disabled. Please contact administrator.',
+      });
+    }
+
     // Check password
     const isPasswordCorrect = await user.comparePassword(password);
     if (!isPasswordCorrect) {
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+      await user.save();
+      await logAuditEvent({
+        level: 'WARN',
+        event: 'FAILED_LOGIN',
+        user: email,
+        userId: user._id,
+        result: 'Failed',
+        message: 'Incorrect password attempt',
+        req,
+      });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
@@ -105,11 +142,22 @@ export const login = async (req, res) => {
 
     // Check 2FA preference
     if (user.twoFactorEnabled) {
-        // Generate and send 2FA code
-        const code = user.generate2FACode();
+        const clientIp = getClientIp(req);
+        // Generate and send 2FA code (hashed in DB)
+        const code = user.generate2FACode(clientIp);
         await user.save();
 
         const emailResult = await send2FACode(email, code, user.name);
+
+        await logAuditEvent({
+          level: 'INFO',
+          event: '2FA_REQUEST',
+          user: user.email,
+          userId: user._id,
+          result: 'Pending',
+          message: 'Two-factor verification challenge dispatched',
+          req,
+        });
 
         return res.status(200).json({
             success: true,
@@ -124,6 +172,8 @@ export const login = async (req, res) => {
     }
 
     // 2FA Disabled: Create session directly
+    user.lastLogin = new Date();
+    user.failedLoginAttempts = 0;
     
     // Parse device info
     const deviceInfo = parseDeviceInfo(req);
@@ -156,6 +206,16 @@ export const login = async (req, res) => {
       duration,
       expiresAt,
       deviceInfo,
+    });
+
+    await logAuditEvent({
+      level: 'INFO',
+      event: user.role === 'admin' ? 'ADMIN_LOGIN' : 'LOGIN',
+      user: user.email,
+      userId: user._id,
+      result: 'Success',
+      message: 'Direct user authentication successful',
+      req,
     });
 
     // Set cookie
@@ -208,7 +268,7 @@ export const verify2FA = async (req, res) => {
     }
 
     // Get user with 2FA fields
-    const user = await User.findById(userId).select('+twoFactorCode +twoFactorCodeExpires');
+    const user = await User.findById(userId).select('+twoFactorCode +twoFactorCodeExpires +twoFactorAttempts');
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -219,15 +279,29 @@ export const verify2FA = async (req, res) => {
     // Verify code
     const isCodeValid = user.verify2FACode(code);
     if (!isCodeValid) {
+      await user.save();
+      await logAuditEvent({
+        level: 'WARN',
+        event: '2FA_VERIFY_FAILED',
+        user: user.email,
+        userId: user._id,
+        result: 'Failed',
+        message: 'Invalid or expired two-factor verification code submitted',
+        req,
+      });
       return res.status(401).json({
         success: false,
         message: 'Invalid or expired verification code',
       });
     }
 
-    // Clear 2FA code
+    // Clear 2FA code and record successful verification
     user.twoFactorCode = undefined;
     user.twoFactorCodeExpires = undefined;
+    user.twoFactorAttempts = 0;
+    user.lastLogin = new Date();
+    user.lastSuccessfulVerification = new Date();
+    user.failedLoginAttempts = 0;
 
     // Parse device info
     const deviceInfo = parseDeviceInfo(req);
@@ -263,6 +337,16 @@ export const verify2FA = async (req, res) => {
       duration,
       expiresAt,
       deviceInfo,
+    });
+
+    await logAuditEvent({
+      level: 'INFO',
+      event: user.role === 'admin' ? 'ADMIN_LOGIN' : 'LOGIN',
+      user: user.email,
+      userId: user._id,
+      result: 'Success',
+      message: 'Two-factor verification completed successfully',
+      req,
     });
 
     // Set cookie

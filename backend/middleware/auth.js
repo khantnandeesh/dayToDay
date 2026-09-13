@@ -2,11 +2,14 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import Session from '../models/Session.js';
 
+export const getJwtSecret = () => {
+  return process.env.JWT_SECRET || 'nandeesh-admin-daytoday-secret-jwt-key-2026';
+};
+
 export const protect = async (req, res, next) => {
   try {
     let token;
 
-    // Check for token in Authorization header or cookies
     if (
       req.headers.authorization &&
       req.headers.authorization.startsWith('Bearer')
@@ -24,10 +27,8 @@ export const protect = async (req, res, next) => {
     }
 
     try {
-      // Verify token
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, getJwtSecret());
 
-      // Check if session exists and is valid
       const session = await Session.findOne({
         token,
         userId: decoded.id,
@@ -41,7 +42,6 @@ export const protect = async (req, res, next) => {
         });
       }
 
-      // Get user
       const user = await User.findById(decoded.id).select('-password');
 
       if (!user || !user.isActive) {
@@ -70,6 +70,77 @@ export const protect = async (req, res, next) => {
   }
 };
 
+export const adminProtect = async (req, res, next) => {
+  try {
+    let token;
+
+    if (
+      req.headers.authorization &&
+      req.headers.authorization.startsWith('Bearer')
+    ) {
+      token = req.headers.authorization.split(' ')[1];
+    } else if (req.cookies.token) {
+      token = req.cookies.token;
+    }
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required. Please log in as an administrator.',
+      });
+    }
+
+    try {
+      const decoded = jwt.verify(token, getJwtSecret());
+
+      const session = await Session.findOne({
+        token,
+        userId: decoded.id,
+        isActive: true,
+      });
+
+      if (!session || !session.isValid()) {
+        return res.status(401).json({
+          success: false,
+          message: 'Admin session has expired. Please log in again.',
+        });
+      }
+
+      const user = await User.findById(decoded.id).select('-password');
+
+      if (!user || !user.isActive) {
+        return res.status(401).json({
+          success: false,
+          message: 'User not found or account is disabled',
+        });
+      }
+
+      if (user.role !== 'admin') {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: Administrator privileges required',
+        });
+      }
+
+      req.user = user;
+      req.session = session;
+      req.token = token;
+
+      next();
+    } catch (error) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired administrative session',
+      });
+    }
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error verifying admin credentials',
+    });
+  }
+};
+
 export const optionalProtect = async (req, res, next) => {
   try {
     let token;
@@ -87,7 +158,7 @@ export const optionalProtect = async (req, res, next) => {
     }
 
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, getJwtSecret());
       const session = await Session.findOne({
         token,
         userId: decoded.id,
