@@ -2,6 +2,62 @@ import os from 'os';
 import mongoose from 'mongoose';
 import { getDbStatus } from '../../config/db.js';
 import { checkEmailProviders } from '../../config/email.js';
+import SystemSetting from '../../models/SystemSetting.js';
+import { logAuditEvent, getClientIp } from '../../services/auditService.js';
+
+export const getSystemSettings = async (req, res) => {
+  try {
+    const allowUserRegistration = await SystemSetting.getSetting('allow_user_registration', true);
+    res.json({
+      success: true,
+      settings: {
+        allowUserRegistration: Boolean(allowUserRegistration),
+      },
+    });
+  } catch (error) {
+    console.error('Error in getSystemSettings:', error);
+    res.status(500).json({ success: false, message: 'Failed to retrieve system settings' });
+  }
+};
+
+export const updateSystemSettings = async (req, res) => {
+  try {
+    const { allowUserRegistration } = req.body;
+    const adminEmail = req.admin?.email || 'admin';
+
+    if (typeof allowUserRegistration === 'boolean') {
+      await SystemSetting.setSetting(
+        'allow_user_registration',
+        allowUserRegistration,
+        adminEmail,
+        'Controls whether new users can register via public sign-up'
+      );
+
+      await logAuditEvent({
+        level: 'INFO',
+        event: 'SYSTEM_POLICY_CHANGED',
+        user: adminEmail,
+        ip: getClientIp(req),
+        result: 'Success',
+        target: 'allow_user_registration',
+        message: `Administrator toggled new user registration: ${allowUserRegistration ? 'ENABLED' : 'DISABLED'}`,
+      });
+    }
+
+    const currentRegistrationSetting = await SystemSetting.getSetting('allow_user_registration', true);
+
+    res.json({
+      success: true,
+      message: `User registration policy updated to: ${currentRegistrationSetting ? 'Enabled' : 'Disabled'}`,
+      settings: {
+        allowUserRegistration: Boolean(currentRegistrationSetting),
+      },
+    });
+  } catch (error) {
+    console.error('Error in updateSystemSettings:', error);
+    res.status(500).json({ success: false, message: 'Failed to update system settings' });
+  }
+};
 
 export const getSystemInfo = async (req, res) => {
   try {
@@ -15,6 +71,7 @@ export const getSystemInfo = async (req, res) => {
 
     const mem = process.memoryUsage();
     const dbStatus = getDbStatus();
+    const allowUserRegistration = await SystemSetting.getSetting('allow_user_registration', true);
 
     // Check presence of environment variables (BOOLEAN / STATUS ONLY, NEVER EXPOSE VALUES)
     const envStatus = {
@@ -79,6 +136,9 @@ export const getSystemInfo = async (req, res) => {
         heapTotalMb: (mem.heapTotal / (1024 * 1024)).toFixed(1),
         heapUsedMb: (mem.heapUsed / (1024 * 1024)).toFixed(1),
         externalMb: (mem.external / (1024 * 1024)).toFixed(1),
+      },
+      policy: {
+        allowUserRegistration: Boolean(allowUserRegistration),
       },
       envChecklist: Object.entries(envStatus).map(([key, configured]) => ({
         key,

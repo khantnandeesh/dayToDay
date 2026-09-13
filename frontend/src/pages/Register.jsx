@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, Mail, Lock, User, AlertCircle, ShieldCheck, Smartphone, Clock } from 'lucide-react';
+import { Eye, EyeOff, Mail, Lock, User, AlertCircle, ShieldCheck, Smartphone, Clock, UserX } from 'lucide-react';
 import api from '../config/api';
 
 const Register = () => {
@@ -15,6 +15,21 @@ const Register = () => {
     });
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [registrationAllowed, setRegistrationAllowed] = useState(true);
+
+    useEffect(() => {
+        let ignore = false;
+        api.get('/auth/registration-status')
+            .then((res) => {
+                if (!ignore && res.data && typeof res.data.allowRegistration === 'boolean') {
+                    setRegistrationAllowed(res.data.allowRegistration);
+                }
+            })
+            .catch(() => {
+                // If endpoint check fails, continue
+            });
+        return () => { ignore = true; };
+    }, []);
 
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -24,6 +39,11 @@ const Register = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
+
+        if (registrationAllowed === false) {
+            setError('New user registrations are currently disabled by the administrator.');
+            return;
+        }
 
         // Validation
         if (!formData.name || !formData.email || !formData.password || !formData.confirmPassword) {
@@ -79,6 +99,29 @@ const Register = () => {
                             Join us today and get started
                         </p>
                     </div>
+
+                    {/* Closed Registration Banner */}
+                    {!registrationAllowed && (
+                        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                            <div className="flex items-start">
+                                <UserX className="w-5 h-5 text-amber-600 mr-3 mt-0.5 flex-shrink-0" />
+                                <div>
+                                    <p className="text-amber-900 text-sm font-semibold">Sign-ups Currently Closed</p>
+                                    <p className="text-amber-800 text-xs mt-1">
+                                        New user registration has been temporarily disabled by the administrator. Existing account holders can still access their accounts.
+                                    </p>
+                                    <div className="mt-3">
+                                        <Link
+                                            to="/login"
+                                            className="inline-flex items-center text-xs font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded transition-colors"
+                                        >
+                                            Sign In to Existing Account &rarr;
+                                        </Link>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Error Message */}
                     {error && (
@@ -205,10 +248,14 @@ const Register = () => {
                         {/* Submit Button */}
                         <button
                             onClick={handleSubmit}
-                            disabled={loading}
+                            disabled={loading || !registrationAllowed}
                             className="w-full bg-slate-900 text-white py-3 rounded-lg font-medium hover:bg-slate-800 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {loading ? 'Creating Account...' : 'Create Account'}
+                            {!registrationAllowed
+                                ? 'Registration Currently Disabled'
+                                : loading
+                                ? 'Creating Account...'
+                                : 'Create Account'}
                         </button>
 
                         {/* Divider */}

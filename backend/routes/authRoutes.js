@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   register,
+  getRegistrationStatus,
   login,
   verify2FA,
   resend2FA,
@@ -18,6 +19,7 @@ import { protect } from '../middleware/auth.js';
 const router = express.Router();
 
 // Public routes
+router.get('/registration-status', getRegistrationStatus);
 router.post('/register', register);
 router.post('/login', login);
 router.post('/verify-2fa', verify2FA);

@@ -13,6 +13,10 @@ export const AdminUsersPage = () => {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
+  // User Registration Policy state
+  const [registrationEnabled, setRegistrationEnabled] = useState(true);
+  const [policyLoading, setPolicyLoading] = useState(false);
+
   // Dialog state
   const [dialogState, setDialogState] = useState({
     isOpen: false,
@@ -85,6 +89,32 @@ export const AdminUsersPage = () => {
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     fetchUsers(1);
+  };
+
+  useEffect(() => {
+    let ignore = false;
+    adminApi.getSettings().then((data) => {
+      if (!ignore && data?.success && data?.settings) {
+        setRegistrationEnabled(Boolean(data.settings.allowUserRegistration));
+      }
+    }).catch(() => {});
+    return () => { ignore = true; };
+  }, []);
+
+  const handleToggleRegistration = async () => {
+    const nextState = !registrationEnabled;
+    setPolicyLoading(true);
+    try {
+      const res = await adminApi.updateSettings({ allowUserRegistration: nextState });
+      if (res.success) {
+        setRegistrationEnabled(Boolean(res.settings?.allowUserRegistration));
+        setMessage(res.message || `Public registration ${nextState ? 'enabled' : 'disabled'}`);
+      }
+    } catch (err) {
+      setMessage(err.response?.data?.message || 'Failed to update registration policy');
+    } finally {
+      setPolicyLoading(false);
+    }
   };
 
   const handleToggleStatus = async (user) => {
@@ -210,6 +240,52 @@ export const AdminUsersPage = () => {
           </button>
         </div>
       )}
+
+      {/* User Registration Policy Banner */}
+      <div
+        style={{
+          padding: '12px 16px',
+          border: '1px solid #24292f',
+          marginBottom: '16px',
+          background: registrationEnabled ? '#f6f8fa' : '#fff8f2',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '12px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: '13px', fontWeight: '600', color: '#24292f', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>New User Registration Policy</span>
+              <span
+                className={`admin-badge ${registrationEnabled ? 'admin-badge-success' : 'admin-badge-danger'}`}
+                style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}
+              >
+                {registrationEnabled ? 'Open / Allowed' : 'Closed / Blocked'}
+              </span>
+            </div>
+            <div style={{ fontSize: '12px', color: '#656d76', marginTop: '3px' }}>
+              {registrationEnabled
+                ? 'Public sign-up is ACTIVE. Visitors can create new accounts via the /register page.'
+                : 'Public sign-up is BLOCKED. New account registrations are currently rejected by the server.'}
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          className={`admin-btn admin-btn-sm ${registrationEnabled ? 'admin-btn-danger' : 'admin-btn-primary'}`}
+          onClick={handleToggleRegistration}
+          disabled={policyLoading}
+        >
+          {policyLoading
+            ? 'Updating Policy...'
+            : registrationEnabled
+            ? 'Disable New Sign-ups'
+            : 'Enable New Sign-ups'}
+        </button>
+      </div>
 
       {/* Filter and Search Bar */}
       <form onSubmit={handleSearchSubmit} className="admin-filter-bar">

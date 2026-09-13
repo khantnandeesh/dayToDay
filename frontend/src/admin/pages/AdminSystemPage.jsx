@@ -5,6 +5,8 @@ export const AdminSystemPage = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [message, setMessage] = useState('');
 
   const fetchSystem = async () => {
     setLoading(true);
@@ -17,6 +19,30 @@ export const AdminSystemPage = () => {
       setError(err.response?.data?.message || 'Failed to load system information');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleRegistration = async () => {
+    if (!data) return;
+    const currentState = data.policy?.allowUserRegistration ?? true;
+    const nextState = !currentState;
+    setPolicyLoading(true);
+    try {
+      const res = await adminApi.updateSettings({ allowUserRegistration: nextState });
+      if (res.success) {
+        setMessage(res.message);
+        setData((prev) => ({
+          ...prev,
+          policy: {
+            ...prev.policy,
+            allowUserRegistration: nextState,
+          },
+        }));
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to update policy');
+    } finally {
+      setPolicyLoading(false);
     }
   };
 
@@ -50,6 +76,29 @@ export const AdminSystemPage = () => {
         </button>
       </header>
 
+      {message && (
+        <div
+          style={{
+            padding: '8px 12px',
+            border: '1px solid #24292f',
+            marginBottom: '16px',
+            fontSize: '13px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <span>{message}</span>
+          <button
+            type="button"
+            onClick={() => setMessage('')}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px' }}
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
       {error && (
         <div style={{ padding: '8px 12px', border: '1px solid #24292f', marginBottom: '16px', fontSize: '13px' }}>
           {error}
@@ -63,6 +112,48 @@ export const AdminSystemPage = () => {
       ) : data ? (
         <>
           <div className="admin-details-grid">
+            {/* System Access Policy */}
+            <div className="admin-detail-box" style={{ borderColor: '#24292f', background: data.policy?.allowUserRegistration ? '#fcfdfd' : '#fffbfa' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h3 style={{ margin: 0 }}>Access Policy</h3>
+                <span
+                  className={`admin-badge ${data.policy?.allowUserRegistration ? 'admin-badge-success' : 'admin-badge-danger'}`}
+                  style={{ textTransform: 'uppercase', fontSize: '10px' }}
+                >
+                  {data.policy?.allowUserRegistration ? 'Sign-ups Open' : 'Sign-ups Closed'}
+                </span>
+              </div>
+              <div className="admin-detail-row">
+                <span className="admin-detail-key">New User Sign-ups</span>
+                <span className="admin-detail-val">
+                  {data.policy?.allowUserRegistration ? 'Enabled (Public)' : 'Disabled (Blocked)'}
+                </span>
+              </div>
+              <div className="admin-detail-row">
+                <span className="admin-detail-key">Registration Route</span>
+                <span className="admin-detail-val admin-mono">/register</span>
+              </div>
+              <div className="admin-detail-row">
+                <span className="admin-detail-key">Policy Enforcement</span>
+                <span className="admin-detail-val">Backend & Frontend Guard</span>
+              </div>
+              <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid #e1e4e8' }}>
+                <button
+                  type="button"
+                  className={`admin-btn admin-btn-sm ${data.policy?.allowUserRegistration ? 'admin-btn-danger' : 'admin-btn-primary'}`}
+                  style={{ width: '100%' }}
+                  onClick={handleToggleRegistration}
+                  disabled={policyLoading}
+                >
+                  {policyLoading
+                    ? 'Updating Policy...'
+                    : data.policy?.allowUserRegistration
+                    ? 'Disable New Sign-ups'
+                    : 'Enable New Sign-ups'}
+                </button>
+              </div>
+            </div>
+
             {/* Host and Runtime */}
             <div className="admin-detail-box">
               <h3>Runtime Environment</h3>

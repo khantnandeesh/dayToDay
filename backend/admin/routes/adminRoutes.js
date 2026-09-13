@@ -38,7 +38,11 @@ import {
   toggleClientStatus,
   deleteMcpClient,
 } from '../controllers/adminMcpController.js';
-import { getSystemInfo } from '../controllers/adminSystemController.js';
+import {
+  getSystemInfo,
+  getSystemSettings,
+  updateSystemSettings,
+} from '../controllers/adminSystemController.js';
 import { getLogs, clearLogs } from '../controllers/adminLogsController.js';
 
 const router = express.Router();
@@ -88,8 +92,10 @@ router.get('/mcp/clients/:id', getMcpClientDetails);
 router.patch('/mcp/clients/:id/status', toggleClientStatus);
 router.delete('/mcp/clients/:id', deleteMcpClient);
 
-// System Info
+// System Info & Settings
 router.get('/system', getSystemInfo);
+router.get('/settings', getSystemSettings);
+router.patch('/settings', updateSystemSettings);
 
 // Logs
 router.get('/logs', getLogs);

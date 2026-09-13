@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import Session from '../models/Session.js';
+import SystemSetting from '../models/SystemSetting.js';
 import { send2FACode, sendWelcomeEmail, sendLoginAlert, checkEmailProviders } from '../config/email.js';
 import { parseDeviceInfo } from '../utils/deviceParser.js';
 import { getJwtSecret } from '../middleware/auth.js';
@@ -13,11 +14,47 @@ const generateToken = (id) => {
   });
 };
 
+// @desc    Get registration status (enabled/disabled)
+// @route   GET /api/auth/registration-status
+// @access  Public
+export const getRegistrationStatus = async (req, res) => {
+  try {
+    const allowRegistration = await SystemSetting.getSetting('allow_user_registration', true);
+    res.json({
+      success: true,
+      allowRegistration,
+    });
+  } catch (error) {
+    res.json({
+      success: true,
+      allowRegistration: true,
+    });
+  }
+};
+
 // @desc    Register user
 // @route   POST /api/auth/register
 // @access  Public
 export const register = async (req, res) => {
   try {
+    // Check if new user registration is enabled by administrator
+    const allowRegistration = await SystemSetting.getSetting('allow_user_registration', true);
+    if (!allowRegistration) {
+      await logAuditEvent({
+        level: 'WARN',
+        event: 'REGISTER_BLOCKED',
+        user: req.body?.email || 'unknown',
+        ip: getClientIp(req),
+        result: 'Failed',
+        message: 'Registration attempt blocked: New user registration is disabled by administrator',
+      });
+      return res.status(403).json({
+        success: false,
+        message: 'New user registration is currently disabled by the administrator.',
+        registrationDisabled: true,
+      });
+    }
+
     const { name, email, password } = req.body;
 
     // Validation
